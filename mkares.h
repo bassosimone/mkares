@@ -11,11 +11,34 @@
 extern "C" {
 #endif  // __cplusplus
 
+typedef struct mkares_query mkares_query_t;
+
+mkares_query_t *mkares_query_new_nonnull(void);
+
+void mkares_query_set_name(mkares_query_t *query, const char *name);
+
+void mkares_query_add_server(
+    mkares_query_t *query, const char *address, const char *port);
+
+void mkares_query_set_AAAA(mkares_query_t *query);
+
+int64_t mkares_query_perform_nonnull(mkares_query_t *query);
+
+void mkares_query_delete(mkares_query_t *query);
+
 #ifdef __cplusplus
 }  // extern "C"
 
 #include <memory>
 #include <string>
+
+struct mkares_query_deleter {
+  void operator()(mkares_query_t *query) {
+    mkares_query_delete(query);
+  }
+};
+
+using mkares_query_uptr = std::unique_ptr<mkares_query_t, mkares_query_deleter>;
 
 #ifdef MKARES_INLINE_IMPL
 
@@ -31,6 +54,7 @@ extern "C" {
 #include <unistd.h>
 #endif
 
+#include <utility>
 #include <vector>
 
 #include <ares.h>
@@ -56,15 +80,40 @@ struct mkares_server {
 
 struct mkares_query {
   size_t attempts = 3;
-  int dnsclass = 0;
-  int id = 0;
+  int dnsclass = ns_c_in;
+  int id = 0; // XXX
   std::string name;
   std::vector<mkares_server> servers;
   int timeout = 3000;  // millisecond
-  int type = 0;
+  int type = ns_t_a;
 };
 
-typedef struct mkares_query mkares_query_t;
+mkares_query_t *mkares_query_new_nonnull() { return new mkares_query_t; }
+
+void mkares_query_set_name(mkares_query_t *query, const char *name) {
+  if (query == nullptr || name == nullptr) {
+    MKARES_ABORT();
+  }
+  query->name = name;
+}
+
+void mkares_query_add_server(
+    mkares_query_t *query, const char *address, const char *port) {
+  if (query == nullptr || address == nullptr || port == nullptr) {
+    MKARES_ABORT();
+  }
+  mkares_server server;
+  server.address = address;
+  server.port = port;
+  query->servers.push_back(std::move(server));
+}
+
+void mkares_query_set_AAAA(mkares_query_t *query) {
+  if (query == nullptr) {
+    MKARES_ABORT();
+  }
+  query->type = ns_t_aaaa;
+}
 
 static int mkares_query_complete_(mkares_query_t *q, hostent *host) {
   if (q == nullptr || host == nullptr) {
@@ -260,8 +309,7 @@ static int mkares_query_try_each_server_(
   return -1;
 }
 
-// mkares_query_main_ runs the query. Returns 0 on success, -1 on failure.
-static int mkares_query_main_(mkares_query_t *q) {
+int64_t mkares_query_perform_nonnull(mkares_query_t *q) {
   if (q == nullptr) {
     MKARES_ABORT();
   }
@@ -280,8 +328,10 @@ static int mkares_query_main_(mkares_query_t *q) {
   ret = mkares_query_try_each_server_(q, buff, static_cast<size_t>(bufsiz));
   MKARES_HOOK(mkares_query_try_each_server_, ret);
   ares_free_string(buff);
-  return ret;
+  return (ret == 0) ? 0 : -1;
 }
+
+void mkares_query_delete(mkares_query_t *query) { delete query; }
 
 #endif // MKARES_INLINE_IMPL
 #endif // __cplusplus
