@@ -85,6 +85,7 @@ struct mkares_query {
   int dnsclass = ns_c_in;
   uint16_t id = 0;
   std::string name;
+  std::vector<std::string> results;
   std::vector<mkares_server> servers;
   int timeout = 3000;  // millisecond
   int type = ns_t_a;
@@ -134,22 +135,28 @@ static int64_t mkares_query_complete_(mkares_query_t *q, hostent *host) {
   for (char **addr = host->h_addr_list; (addr && *addr); ++addr) {
     char name[46];  // see https://stackoverflow.com/questions/1076714
     const char *s = nullptr;
-    // XXX: more consistency checks here
     switch (host->h_addrtype) {
       case AF_INET:
-      s = inet_ntop(AF_INET, *addr, name, sizeof(name));
-      break;
-    case AF_INET6:
-      s = inet_ntop(AF_INET6, *addr, name, sizeof(name));
-      break;
-    default:
-      abort();
+        if (host->h_length != 4) {
+          MKARES_ABORT();
+        }
+        s = inet_ntop(AF_INET, *addr, name, sizeof(name));
+        break;
+      case AF_INET6:
+        if (host->h_length != 16) {
+          MKARES_ABORT();
+        }
+        s = inet_ntop(AF_INET6, *addr, name, sizeof(name));
+        break;
+      default:
+        abort();
     }
     if (s == nullptr) {
       MKARES_LOG("cannot process address returned by c-ares");
       return -1;
     }
     MKARES_LOG("address: " << name);
+    q->results.push_back(name);
   }
   return 0;
 }
