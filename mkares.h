@@ -115,7 +115,7 @@ void mkares_query_set_AAAA(mkares_query_t *query) {
   query->type = ns_t_aaaa;
 }
 
-static int mkares_query_complete_(mkares_query_t *q, hostent *host) {
+static int64_t mkares_query_complete_(mkares_query_t *q, hostent *host) {
   if (q == nullptr || host == nullptr) {
     MKARES_ABORT();
   }
@@ -147,7 +147,7 @@ static int mkares_query_complete_(mkares_query_t *q, hostent *host) {
 
 // mkares_query_recv_ receives the response to a query. Returns zero
 // in case of success and -1 in case of failure.
-static int mkares_query_recv_(
+static int64_t mkares_query_recv_(
     mkares_query_t *q, int64_t fd, unsigned char *rbuff, size_t rbufsiz) {
   if (q == nullptr || fd == -1 || rbuff == nullptr || rbufsiz <= 0) {
     MKARES_ABORT();
@@ -204,8 +204,9 @@ static int mkares_query_recv_(
 
 // mkares_query_sendrecv_ sends a query and receives the response. It retries
 // in case of timeout. Returns -1 on failure, and 0 on success.
-static int mkares_query_sendrecv_(mkares_query_t *q, const unsigned char *sbuff,
-                                  size_t sbufsiz, addrinfo *aip, int64_t fd) {
+static int64_t mkares_query_sendrecv_(
+    mkares_query_t *q, const unsigned char *sbuff, size_t sbufsiz,
+    addrinfo *aip, int64_t fd) {
   if (q == nullptr || sbuff == nullptr || sbufsiz <= 0 ||
       aip == nullptr || fd == -1) {
     MKARES_ABORT();
@@ -258,7 +259,7 @@ static int mkares_query_sendrecv_(mkares_query_t *q, const unsigned char *sbuff,
 
 // mkares_query_try_server_ tries sending a serialised query to a specific
 // server. Returns 0 on success, and -1 on failure.
-static int mkares_query_try_server_(
+static int64_t mkares_query_try_server_(
     mkares_query_t *q, const unsigned char *buff,
     size_t bufsiz, addrinfo *aip) {
   if (q == nullptr || buff == nullptr || bufsiz <= 0 || aip == nullptr) {
@@ -282,7 +283,7 @@ static int mkares_query_try_server_(
 
 // mkares_query_try_each_server_ tries sending the query to each server. It
 // returns 0 on success, and -1 on failure.
-static int mkares_query_try_each_server_(
+static int64_t mkares_query_try_each_server_(
     mkares_query_t *q, const unsigned char *buff, size_t bufsiz) {
   if (q == nullptr || buff == nullptr || bufsiz <= 0) {
     MKARES_ABORT();
@@ -328,7 +329,7 @@ int64_t mkares_query_perform_nonnull(mkares_query_t *q) {
   ret = mkares_query_try_each_server_(q, buff, static_cast<size_t>(bufsiz));
   MKARES_HOOK(mkares_query_try_each_server_, ret);
   ares_free_string(buff);
-  return (ret == 0) ? 0 : -1;
+  return ret;
 }
 
 void mkares_query_delete(mkares_query_t *query) { delete query; }
