@@ -22,6 +22,8 @@ void mkares_query_add_server(
 
 void mkares_query_set_AAAA(mkares_query_t *query);
 
+void mkares_query_set_id(mkares_query_t *query, uint16_t id);
+
 int64_t mkares_query_perform_nonnull(mkares_query_t *query);
 
 void mkares_query_delete(mkares_query_t *query);
@@ -81,7 +83,7 @@ struct mkares_server {
 struct mkares_query {
   size_t attempts = 3;
   int dnsclass = ns_c_in;
-  int id = 0; // XXX
+  uint16_t id = 0;
   std::string name;
   std::vector<mkares_server> servers;
   int timeout = 3000;  // millisecond
@@ -113,6 +115,13 @@ void mkares_query_set_AAAA(mkares_query_t *query) {
     MKARES_ABORT();
   }
   query->type = ns_t_aaaa;
+}
+
+void mkares_query_set_id(mkares_query_t *query, uint16_t id) {
+  if (query == nullptr) {
+    MKARES_ABORT();
+  }
+  query->id = id;
 }
 
 static int64_t mkares_query_complete_(mkares_query_t *q, hostent *host) {
