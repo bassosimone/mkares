@@ -26,6 +26,11 @@ void mkares_query_set_id(mkares_query_t *query, uint16_t id);
 
 int64_t mkares_query_perform_nonnull(mkares_query_t *query);
 
+size_t mkares_query_get_addresses_size(const mkares_query_t *query);
+
+const char *mkares_query_get_address_at(
+    const mkares_query_t *query, size_t idx);
+
 void mkares_query_delete(mkares_query_t *query);
 
 #ifdef __cplusplus
@@ -81,11 +86,11 @@ struct mkares_server {
 };
 
 struct mkares_query {
+  std::vector<std::string> addresses;
   size_t attempts = 3;
   int dnsclass = ns_c_in;
   uint16_t id = 0;
   std::string name;
-  std::vector<std::string> results;
   std::vector<mkares_server> servers;
   int timeout = 3000;  // millisecond
   int type = ns_t_a;
@@ -158,7 +163,7 @@ static int64_t mkares_query_complete_(mkares_query_t *q, hostent *host) {
       return -1;
     }
     MKARES_LOG("address: " << name);
-    q->results.push_back(name);
+    q->addresses.push_back(name);
   }
   return 0;
 }
@@ -348,6 +353,21 @@ int64_t mkares_query_perform_nonnull(mkares_query_t *q) {
   MKARES_HOOK(mkares_query_try_each_server_, ret);
   ares_free_string(buff);
   return ret;
+}
+
+size_t mkares_query_get_addresses_size(const mkares_query_t *query) {
+  if (query == nullptr) {
+    MKARES_ABORT();
+  }
+  return query->addresses.size();
+}
+
+const char *mkares_query_get_address_at(
+    const mkares_query_t *query, size_t idx) {
+  if (query == nullptr || idx >= query->addresses.size()) {
+    MKARES_ABORT();
+  }
+  return query->addresses[idx].c_str();
 }
 
 void mkares_query_delete(mkares_query_t *query) { delete query; }
