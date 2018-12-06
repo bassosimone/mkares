@@ -125,6 +125,8 @@ void mkares_query_set_id(mkares_query_t *query, uint16_t id) {
   query->id = id;
 }
 
+// mkares_query_complete_ is called to complete the query. It aborts if it's
+// passed any null pointer argument by the caller.
 static int64_t mkares_query_complete_(mkares_query_t *q, hostent *host) {
   if (q == nullptr || host == nullptr) {
     MKARES_ABORT();
