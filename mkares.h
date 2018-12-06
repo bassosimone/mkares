@@ -312,7 +312,7 @@ static int64_t mkares_query_sendrecv_(
     MKARES_LOG(q, (nlohmann::json{
                       {"func", "send"},
                       {"ret", n},
-                      {"data", mkares_maybe_base64(sbuff, sbufsiz)},
+                      {"data", mkares_maybe_base64(sbuff, n)},
                   }));
     if (n < 0 || static_cast<size_t>(n) != sbufsiz) {
       return -1;
