@@ -5,6 +5,7 @@
 #define MEASUREMENT_KIT_MKARES_H
 
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 
 #ifdef __cplusplus
@@ -57,9 +58,9 @@ using mkares_query_uptr = std::unique_ptr<mkares_query_t, mkares_query_deleter>;
 #else
 #include <arpa/inet.h>
 #include <arpa/nameser.h>
-#include <sys/socket.h>
 #include <netdb.h>
 #include <poll.h>
+#include <sys/socket.h>
 #include <unistd.h>
 #endif
 
@@ -68,18 +69,16 @@ using mkares_query_uptr = std::unique_ptr<mkares_query_t, mkares_query_deleter>;
 
 #include <ares.h>
 
+#include "json.hpp"
+
+#include "mkdata.h"
+
 #ifndef MKARES_ABORT
 #define MKARES_ABORT() abort()
 #endif
 
 #ifndef MKARES_HOOK
-#include <iostream>
-#define MKARES_HOOK(T, V) std::clog << #T << ": " << V << std::endl
-#endif
-
-#ifndef MKARES_LOG
-#include <iostream>
-#define MKARES_LOG(Args) std::clog << Args << std::endl
+#define MKARES_HOOK(T, V)  // Nothing
 #endif
 
 struct mkares_server {
@@ -93,6 +92,7 @@ struct mkares_query {
   std::string cname;
   int dnsclass = ns_c_in;
   uint16_t id = 0;
+  FILE *logfile = stderr;
   std::string name;
   std::vector<mkares_server> servers;
   int timeout = 3000;  // millisecond
@@ -133,6 +133,16 @@ void mkares_query_set_id(mkares_query_t *query, uint16_t id) {
   query->id = id;
 }
 
+// MKARES_LOG logs @p Event using @p Query's logfile.
+#define MKARES_LOG(Query, Event)                                      \
+  do {                                                                \
+    auto now = std::chrono::duration_cast<std::chrono::milliseconds>( \
+        std::chrono::steady_clock::now().time_since_epoch());         \
+    nlohmann::json ev = Event;                                        \
+    ev["now"] = now.count();                                          \
+    (void)fprintf(Query->logfile, "%s\n", ev.dump().c_str());         \
+  } while (0)
+
 // mkares_query_complete_ is called to complete the query. It aborts if it's
 // passed any null pointer argument by the caller.
 static int64_t mkares_query_complete_(mkares_query_t *q, hostent *host) {
@@ -161,13 +171,28 @@ static int64_t mkares_query_complete_(mkares_query_t *q, hostent *host) {
       default:
         abort();
     }
+    MKARES_LOG(q, (nlohmann::json{
+                      {"func", "inet_ntop"},
+                      {"ret", s}}));
     if (s == nullptr) {
-      MKARES_LOG("cannot process address returned by c-ares");
       return -1;
     }
     q->addresses.push_back(name);
   }
   return 0;
+}
+
+// mkares_maybe_base64 returns a base64 encoded string if @p count is
+// positive, otherwise it returns an empty string.
+template <typename Type>
+std::string mkares_maybe_base64(const unsigned char *buff, Type count) {
+  if (count <= 0 || static_cast<uint64_t>(count) > SIZE_MAX) {
+    return "";
+  }
+  mkdata_uptr data{mkdata_new_nonnull()};
+  mkdata_movein_data(data, std::string{reinterpret_cast<const char *>(buff),
+                                       static_cast<size_t>(count)});
+  return mkdata_moveout_base64(data);
 }
 
 // mkares_query_recv_ receives the response to a query. Returns zero
@@ -187,40 +212,63 @@ static int64_t mkares_query_recv_(
   int ret = poll(&pfd, 1, q->timeout);
 #endif
   MKARES_HOOK(poll, ret);
-  if (ret < 0) {
-    MKARES_LOG("poll failed");
-    return -1;
-  }
-  if (ret == 0) {
-    MKARES_LOG("poll timed out");
+  MKARES_LOG(q, (nlohmann::json{
+                    {"func", "poll"},
+                    {"ret", ret},
+                }));
+  if (ret <= 0) {
     return -1;
   }
 #ifdef _WIN32
   if (rbufsiz > INT_MAX) {
-    MKARES_LOG("recv buffer size too large");
-    return -1;
+    MKARES_ABORT();
   }
-  int n = recv(static_cast<SOCKET>(fd), rbuff, static_cast<int>(rbufsiz), 0);
+  int n = recv(static_cast<SOCKET>(fd),
+               reinterpret_cast<char *>(rbuff),
+               static_cast<int>(rbufsiz), 0);
 #else
   ssize_t n = recv(static_cast<int>(fd), rbuff, rbufsiz, 0);
 #endif
+  MKARES_HOOK(recv, n);
+  MKARES_LOG(q, (nlohmann::json{
+                    {"func", "recv"},
+                    {"ret", n},
+                    {"data", mkares_maybe_base64(rbuff, n)},
+                }));
   if (n <= 0) {
-    MKARES_LOG("recv failed");
     return -1;
+  }
+  if (static_cast<size_t>(n) > INT_MAX) {
+    MKARES_ABORT();
   }
   hostent *host = nullptr;
   switch (q->type) {
     case ns_t_a:
-      ret = ares_parse_a_reply(rbuff, rbufsiz, &host, nullptr, 0);
+      ret = ares_parse_a_reply(
+          rbuff, static_cast<int>(n), &host, nullptr, 0);
+      MKARES_HOOK(ares_parse_a_reply, ret);
+      MKARES_LOG(q, (nlohmann::json{
+                        {"func", "ares_parse_a_reply"},
+                        {"ret", ret},
+                    }));
       break;
     case ns_t_aaaa:
-      ret = ares_parse_aaaa_reply(rbuff, rbufsiz, &host, nullptr, 0);
+      ret = ares_parse_aaaa_reply(
+          rbuff, static_cast<int>(n), &host, nullptr, 0);
+      MKARES_HOOK(ares_parse_aaaa_reply, ret);
+      MKARES_LOG(q, (nlohmann::json{
+                        {"func", "ares_parse_aaaa_reply"},
+                        {"ret", ret},
+                    }));
       break;
     default:
-      abort();  // should not happen
+      MKARES_ABORT();  // should not happen
   }
-  if (ret != 0) {
+  if (ret != ARES_SUCCESS && ret != ARES_ENODATA) {
     return -1;
+  }
+  if (ret == ARES_ENODATA) {
+    return 0;  // in this case it doesn't make sense to retry
   }
   ret = mkares_query_complete_(q, host);
   ares_free_hostent(host);
@@ -242,35 +290,38 @@ static int64_t mkares_query_sendrecv_(
   int ret = connect(static_cast<int>(fd), aip->ai_addr, aip->ai_addrlen);
 #endif
   MKARES_HOOK(connect, ret);
+  MKARES_LOG(q, (nlohmann::json{
+                    {"func", "connect"},
+                    {"ret", ret},
+                }));
   if (ret != 0) {
-    MKARES_LOG("cannot connect to remote endpoint");
     return -1;
   }
   for (size_t i = 0; i < q->attempts; ++i) {
 #ifdef _WIN32
     if (sbufsiz > INT_MAX) {
-      MKARES_LOG("buffer too larger");
-      return -1;
+      MKARES_ABORT();
     }
-    int n = send(static_cast<SOCKET>(fd), sbuff, static_cast<int>(sbufsiz), 0);
+    int n = send(static_cast<SOCKET>(fd),
+                 reinterpret_cast<const char *>(sbuff),
+                 static_cast<int>(sbufsiz), 0);
 #else
     ssize_t n = send(static_cast<int>(fd), sbuff, sbufsiz, 0);
 #endif
     MKARES_HOOK(send, n);
-    if (n < 0) {
-      MKARES_LOG("cannot send query");
-      return -1;
-    }
-    if (static_cast<size_t>(n) != sbufsiz) {
-      MKARES_LOG("short write");
+    MKARES_LOG(q, (nlohmann::json{
+                      {"func", "send"},
+                      {"ret", n},
+                      {"data", mkares_maybe_base64(sbuff, sbufsiz)},
+                  }));
+    if (n < 0 || static_cast<size_t>(n) != sbufsiz) {
       return -1;
     }
     size_t rbuffsiz = 2048;
     unsigned char *rbuff = reinterpret_cast<unsigned char *>(malloc(rbuffsiz));
     MKARES_HOOK(malloc, rbuff);
     if (rbuff == nullptr) {
-      MKARES_LOG("cannot allocate receive buffer");
-      return -1;
+      MKARES_ABORT();
     }
     int ret = mkares_query_recv_(q, fd, rbuff, rbuffsiz);
     MKARES_HOOK(mkares_query_recv_, ret);
@@ -292,8 +343,11 @@ static int64_t mkares_query_try_server_(
   }
   int64_t fd = static_cast<int64_t>(socket(aip->ai_family, SOCK_DGRAM, 0));
   MKARES_HOOK(socket, fd);
+  MKARES_LOG(q, (nlohmann::json{
+                    {"func", "socket"},
+                    {"ret", fd},
+                }));
   if (fd == -1) {
-    MKARES_LOG("cannot create datagram socket");
     return -1;
   }
   int ret = mkares_query_sendrecv_(q, buff, bufsiz, aip, fd);
@@ -320,8 +374,11 @@ static int64_t mkares_query_try_each_server_(
     addrinfo *rp = nullptr;
     int ret = getaddrinfo(s.address.c_str(), s.port.c_str(), &hints, &rp);
     MKARES_HOOK(getaddrinfo, ret);
+    MKARES_LOG(q, (nlohmann::json{
+                      {"func", "getaddrinfo"},
+                      {"ret", ret},
+                  }));
     if (ret != 0) {
-      MKARES_LOG("cannot parse server address and/or port");
       continue;
     }
     ret = mkares_query_try_server_(q, buff, bufsiz, rp);
@@ -331,7 +388,6 @@ static int64_t mkares_query_try_each_server_(
       return 0;
     }
   }
-  MKARES_LOG("all servers have failed");
   return -1;
 }
 
@@ -344,8 +400,11 @@ int64_t mkares_query_perform_nonnull(mkares_query_t *q) {
   int ret = ares_create_query(q->name.c_str(), q->dnsclass, q->type, q->id, 1,
                               &buff, &bufsiz, 0);
   MKARES_HOOK(ares_create_query, ret);
+  MKARES_LOG(q, (nlohmann::json{
+                    {"func", "ares_create_query"},
+                    {"ret", ret},
+                }));
   if (ret != 0) {
-    MKARES_LOG("cannot create query");
     return -1;
   }
   if (buff == nullptr || bufsiz < 0 || static_cast<size_t>(bufsiz) > SIZE_MAX) {
@@ -381,6 +440,6 @@ const char *mkares_query_get_address_at(
 
 void mkares_query_delete(mkares_query_t *query) { delete query; }
 
-#endif // MKARES_INLINE_IMPL
-#endif // __cplusplus
-#endif // MEASUREMENT_KIT_MKARES_H
+#endif  // MKARES_INLINE_IMPL
+#endif  // __cplusplus
+#endif  // MEASUREMENT_KIT_MKARES_H
