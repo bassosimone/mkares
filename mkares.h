@@ -26,6 +26,8 @@ void mkares_query_set_id(mkares_query_t *query, uint16_t id);
 
 int64_t mkares_query_perform_nonnull(mkares_query_t *query);
 
+const char *mkares_query_get_cname(const mkares_query_t *query);
+
 size_t mkares_query_get_addresses_size(const mkares_query_t *query);
 
 const char *mkares_query_get_address_at(
@@ -88,6 +90,7 @@ struct mkares_server {
 struct mkares_query {
   std::vector<std::string> addresses;
   size_t attempts = 3;
+  std::string cname;
   int dnsclass = ns_c_in;
   uint16_t id = 0;
   std::string name;
@@ -137,7 +140,7 @@ static int64_t mkares_query_complete_(mkares_query_t *q, hostent *host) {
     MKARES_ABORT();
   }
   if (host->h_name != nullptr) {
-    MKARES_LOG("cname: " << host->h_name);
+    q->cname = host->h_name;
   }
   for (char **addr = host->h_addr_list; (addr && *addr); ++addr) {
     char name[46];  // see https://stackoverflow.com/questions/1076714
@@ -162,7 +165,6 @@ static int64_t mkares_query_complete_(mkares_query_t *q, hostent *host) {
       MKARES_LOG("cannot process address returned by c-ares");
       return -1;
     }
-    MKARES_LOG("address: " << name);
     q->addresses.push_back(name);
   }
   return 0;
@@ -353,6 +355,13 @@ int64_t mkares_query_perform_nonnull(mkares_query_t *q) {
   MKARES_HOOK(mkares_query_try_each_server_, ret);
   ares_free_string(buff);
   return ret;
+}
+
+const char *mkares_query_get_cname(const mkares_query_t *query) {
+  if (query == nullptr) {
+    MKARES_ABORT();
+  }
+  return query->cname.c_str();
 }
 
 size_t mkares_query_get_addresses_size(const mkares_query_t *query) {
