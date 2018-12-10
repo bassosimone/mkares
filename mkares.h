@@ -56,6 +56,10 @@ size_t mkares_response_get_addresses_size(const mkares_response_t *response);
 const char *mkares_response_get_address_at(
     const mkares_response_t *response, size_t idx);
 
+// TODO(bassosimone): the events should probably also include the query ID
+// because that would be useful to cross correlate with events occurred when
+// receiving additional most-likely spoofed responses.
+
 /// mkares_response_get_events_size is like mkares_response_get_addresses_size
 /// but for events rather than addresses. Events are a sequence of string
 /// serialised JSON objects that describe all the events occurring at the API
