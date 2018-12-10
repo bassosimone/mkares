@@ -121,7 +121,7 @@ struct mkares_reaper_deleter {
 };
 
 using mkares_reaper_uptr = std::unique_ptr<mkares_reaper_t,
-                                                  mkares_reaper_deleter>;
+                                           mkares_reaper_deleter>;
 
 #ifdef MKARES_INLINE_IMPL
 
@@ -347,9 +347,9 @@ static bool mkares_channel_connect(
                         channel->port.c_str(), &hints, &rp);
   MKARES_HOOK(getaddrinfo, ret);
   MKARES_EVADD(response, (nlohmann::json{
-                          {"func", "getaddrinfo"},
-                          {"ret", ret},
-                      }));
+                             {"func", "getaddrinfo"},
+                             {"ret", ret},
+                         }));
   if (ret != 0) return false;
   if (rp == nullptr || rp->ai_next != nullptr) MKARES_ABORT();
   bool ok = mkares_channel_connect_addrinfo(channel, rp, response);
@@ -451,9 +451,9 @@ mkares_response_parse_hostent(mkares_response_uptr &response, hostent *host) {
       default: MKARES_ABORT();
     }
     MKARES_EVADD(response, (nlohmann::json{
-                             {"func", "inet_ntop"},
-                             {"ret", s},
-                         }));
+                               {"func", "inet_ntop"},
+                               {"ret", s},
+                           }));
     if (s == nullptr) return false;  // unlikely but better not to abort here
     response->addresses.push_back(s);
   }
@@ -668,9 +668,8 @@ static void mkares_reaper_loop(
 mkares_reaper_t *mkares_reaper_new_nonnull() {
   mkares_reaper_uptr reaper{new mkares_reaper_t};
   reaper->thread = std::thread{
-    mkares_reaper_loop,
-    reaper.get()
-  };
+      mkares_reaper_loop,
+      reaper.get()};
   return reaper.release();
 }
 
