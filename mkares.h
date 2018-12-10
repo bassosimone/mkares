@@ -20,8 +20,6 @@ void mkares_query_set_name(mkares_query_t *query, const char *name);
 
 void mkares_query_set_type_AAAA(mkares_query_t *query);
 
-void mkares_query_set_id(mkares_query_t *query, uint16_t id);
-
 void mkares_query_delete(mkares_query_t *query);
 
 typedef struct mkares_response mkares_response_t;
@@ -146,6 +144,8 @@ using mkares_reaper_uptr = std::unique_ptr<mkares_reaper_t,
 
 #include <ares.h>
 
+#include <openssl/rand.h>
+
 #include "json.hpp"
 
 #include "mkdata.h"
@@ -158,18 +158,66 @@ using mkares_reaper_uptr = std::unique_ptr<mkares_reaper_t,
 #define MKARES_HOOK(T, V)  // Nothing
 #endif
 
+// mkares_ids
+// ----------
+
+struct mkares_ids {
+  std::set<uint16_t> ids;
+  std::mutex mutex;
+};
+
+// mkares_ids_singleton_nonnull returns a singleton suitable for generating
+// and remembering currently-in-use query IDs. This function will never
+// return a null pointer and will abort if any allocation fails or it is
+// not possible to initialise a CSRNG.
+static mkares_ids *mkares_ids_singleton_nonnull() {
+  static std::mutex mutex;
+  static std::unique_ptr<mkares_ids> singleton = nullptr;
+  std::unique_lock<std::mutex> _{mutex};
+  if (singleton == nullptr) {
+    singleton.reset(new mkares_ids);
+    int ret = RAND_poll();
+    MKARES_HOOK(RAND_poll, ret);
+    if (ret != 1) MKARES_ABORT();
+  }
+  return singleton.get();
+}
+
+// mkares_ids_get returns a ID suitable for a DNS query. The returned ID is
+// in use until you mkares_ids_put it. This function will abort if it cannot
+// gather enough entropy to generate a random ID.
+static uint16_t mkares_ids_get() {
+  mkares_ids *ids = mkares_ids_singleton_nonnull();
+  if (ids == nullptr) MKARES_ABORT();
+  uint16_t id = 0;
+  std::unique_lock<std::mutex> _{ids->mutex};
+  for (;;) {
+    int ret = RAND_bytes(reinterpret_cast<unsigned char *>(&id), sizeof(id));
+    MKARES_HOOK(RAND_bytes, ret);
+    if (ret != 1) MKARES_ABORT();
+    if (ids->ids.count(id) <= 0) break;
+  }
+  ids->ids.insert(id);  // covered by unique_lock
+  return id;
+}
+
+// mkares_ids_put stops using @p id.
+static void mkares_ids_put(uint16_t id) {
+  mkares_ids *ids = mkares_ids_singleton_nonnull();
+  if (ids == nullptr) MKARES_ABORT();
+  std::unique_lock<std::mutex> _{ids->mutex};
+  ids->ids.erase(id);
+}
+
 // mkares_query
 // ------------
 
 struct mkares_query {
   std::string name;
   int dnsclass = ns_c_in;
-  uint16_t id = 0;
+  uint16_t id = mkares_ids_get();
   int type = ns_t_a;
 };
-
-// TODO(bassosimone): as suggested by @irl we SHOULD NOT emit requests
-// with predictable queries to avoid being fingerprintable.
 
 mkares_query_t *mkares_query_new_nonnull() { return new mkares_query_t; }
 
@@ -187,14 +235,12 @@ void mkares_query_set_type_AAAA(mkares_query_t *query) {
   query->type = ns_t_aaaa;
 }
 
-void mkares_query_set_id(mkares_query_t *query, uint16_t id) {
-  if (query == nullptr) {
-    MKARES_ABORT();
+void mkares_query_delete(mkares_query_t *query) {
+  if (query != nullptr) {
+    mkares_ids_put(query->id);
+    delete query;
   }
-  query->id = id;
 }
-
-void mkares_query_delete(mkares_query_t *query) { delete query; }
 
 // mkares_response
 // ---------------
