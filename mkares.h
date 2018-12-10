@@ -364,9 +364,8 @@ static bool mkares_channel_connect(
 template <typename BufferType, typename SizeType>
 std::string mkares_maybe_base64(const BufferType buff, SizeType count) {
   if (buff == nullptr) MKARES_ABORT();
-  if (count <= 0 || static_cast<uint64_t>(count) > SIZE_MAX) {
-    return "";
-  }
+  if (count <= 0) return "";
+  if (static_cast<uint64_t>(count) > SIZE_MAX) MKARES_ABORT();
   mkdata_uptr data{mkdata_new_nonnull()};
   mkdata_movein_data(data, std::string{reinterpret_cast<const char *>(buff),
                                        static_cast<size_t>(count)});
