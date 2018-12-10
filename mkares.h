@@ -53,8 +53,24 @@ mkares_response_t *mkares_channel_sendrecv_nonnull(
 
 void mkares_channel_delete(mkares_channel_t *channel);
 
-// TODO(bassosimone): allow to wait in channel _after_ the first
-// request has been sent, so we'll fullfill all requirements.
+typedef struct mkares_event mkares_event_t;
+
+const char *mkares_event_str(const mkares_event_t *event);
+
+void mkares_event_delete(mkares_event_t *event);
+
+typedef struct mkares_reaper mkares_reaper_t;
+
+mkares_reaper_t *mkares_reaper_new_nonnull(void);
+
+void mkares_reaper_movein_channel_and_query(
+    mkares_reaper_t *reaper,
+    mkares_channel_t *channel, mkares_query_t *query);
+
+mkares_event_t *mkares_reaper_get_next_event(
+    mkares_reaper_t *reaper);
+
+void mkares_reaper_delete(mkares_reaper_t *reaper);
 
 #ifdef __cplusplus
 }  // extern "C"
@@ -71,6 +87,15 @@ struct mkares_query_deleter {
 using mkares_query_uptr = std::unique_ptr<mkares_query_t,
                                           mkares_query_deleter>;
 
+struct mkares_response_deleter {
+  void operator()(mkares_response_t *response) {
+    mkares_response_delete(response);
+  }
+};
+
+using mkares_response_uptr = std::unique_ptr<mkares_response_t,
+                                             mkares_response_deleter>;
+
 struct mkares_channel_deleter {
   void operator()(mkares_channel_t *channel) {
     mkares_channel_delete(channel);
@@ -80,14 +105,23 @@ struct mkares_channel_deleter {
 using mkares_channel_uptr = std::unique_ptr<mkares_channel_t,
                                             mkares_channel_deleter>;
 
-struct mkares_response_deleter {
-  void operator()(mkares_response_t *response) {
-    mkares_response_delete(response);
+struct mkares_event_deleter {
+  void operator()(mkares_event_t *event) {
+    mkares_event_delete(event);
   }
 };
 
-using mkares_response_uptr = std::unique_ptr<mkares_response_t,
-                                             mkares_response_deleter>;
+using mkares_event_uptr = std::unique_ptr<mkares_event_t,
+                                          mkares_event_deleter>;
+
+struct mkares_reaper_deleter {
+  void operator()(mkares_reaper_t *reaper) {
+    mkares_reaper_delete(reaper);
+  }
+};
+
+using mkares_reaper_uptr = std::unique_ptr<mkares_reaper_t,
+                                                  mkares_reaper_deleter>;
 
 #ifdef MKARES_INLINE_IMPL
 
@@ -103,6 +137,10 @@ using mkares_response_uptr = std::unique_ptr<mkares_response_t,
 #include <unistd.h>
 #endif
 
+#include <deque>
+#include <mutex>
+#include <set>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -235,14 +273,18 @@ void mkares_channel_set_port(mkares_channel_t *channel, const char *port) {
   channel->port = port;
 }
 
+static int64_t mkares_now() {
+  auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::steady_clock::now().time_since_epoch());
+  return now.count();
+}
+
 // MKARES_EVADD adds @p Event to @p Response events.
-#define MKARES_EVADD(Response, Event)                                 \
-  do {                                                                \
-    auto now = std::chrono::duration_cast<std::chrono::milliseconds>( \
-        std::chrono::steady_clock::now().time_since_epoch());         \
-    nlohmann::json ev = Event;                                        \
-    ev["now"] = now.count();                                          \
-    Response->events.push_back(ev.dump());                            \
+#define MKARES_EVADD(Response, Event)      \
+  do {                                     \
+    nlohmann::json ev = Event;             \
+    ev["now"] = mkares_now();              \
+    Response->events.push_back(ev.dump()); \
   } while (0)
 
 // mkares_channel_connect_addrinfo connects @p channel to the socket
@@ -522,6 +564,148 @@ void mkares_channel_delete(mkares_channel_t *channel) {
 #endif
   }
   delete channel;  // gracefully handles nullptr
+}
+
+// mkares_event
+// ------------
+
+struct mkares_event {
+  std::string s;
+};
+
+const char *mkares_event_str(const mkares_event_t *event) {
+  if (event == nullptr) MKARES_ABORT();
+  return event->s.c_str();
+}
+
+void mkares_event_delete(mkares_event_t *event) { delete event; }
+
+// mkares_reaper
+// --------------------
+
+struct mkares_dead_context {
+  int64_t since = 0;
+  mkares_channel_uptr channel;
+  mkares_query_uptr query;
+};
+
+using mkares_dead_context_uptr = std::unique_ptr<mkares_dead_context>;
+
+struct mkares_reaper {
+  std::deque<mkares_dead_context_uptr> contexts;
+  std::deque<mkares_event_uptr> events;
+  std::mutex mutex;
+  std::atomic_bool stop{false};
+  std::thread thread;
+};
+
+static void mkares_reaper_loop(
+    mkares_reaper_t *reaper) {
+  if (reaper == nullptr) MKARES_ABORT();
+  while (!reaper->stop) {
+    std::deque<mkares_dead_context_uptr> contexts;
+    {
+      std::unique_lock<std::mutex> _{reaper->mutex};
+      while (!reaper->contexts.empty()) {
+        mkares_dead_context_uptr context;
+        std::swap(context, reaper->contexts.front());
+        reaper->contexts.pop_front();
+        if (context->channel->fd == -1) continue;
+        contexts.push_back(std::move(context));
+      }
+    }
+    std::vector<pollfd> pfds;
+    for (mkares_dead_context_uptr &context : contexts) {
+      pollfd pfd{};
+      pfd.events = POLLIN;
+#ifdef _WIN32
+      pfd.fd = static_cast<SOCKET>(context->channel->fd);
+#else
+      pfd.fd = static_cast<int>(context->channel->fd);
+#endif
+    }
+    constexpr int timeout = 250;
+    // TODO(bassosimone): make sure we don't overflow the size
+#ifdef _WIN32
+    int ret = WSAPoll(pfds.data(), pfds.size(), timeout);
+#else
+    int ret = poll(pfds.data(), pfds.size(), timeout);
+#endif
+    // TODO(bassosimone): specifically handle all poll errors
+    if (ret < 0) continue;
+    std::set<int64_t> readable_or_error;
+    for (const pollfd &pfd : pfds) {
+      if (pfd.revents != 0) readable_or_error.insert(pfd.fd);
+    }
+    while (!contexts.empty()) {
+      mkares_dead_context_uptr context;
+      std::swap(context, contexts.front());
+      contexts.pop_front();
+      if (readable_or_error.count(context->channel->fd) <= 0 &&
+          (context->channel->timeout < 0 ||
+           mkares_now() - context->since > context->channel->timeout)) {
+        reaper->contexts.push_back(std::move(context));
+        continue;
+      }
+      if (readable_or_error.count(context->channel->fd) <= 0) {
+        continue;
+      }
+      // If we arrive here, the channel is readable (or there has been an
+      // error). So, re-execute the recv path and store the results.
+      mkares_response_uptr response{new mkares_response_t};
+      mkares_channel_recv(
+          context->channel.get(), context->query.get(), response);
+      for (std::string &s : response->events) {
+        mkares_event_uptr event{new mkares_event_t};
+        std::swap(s, event->s);
+        std::unique_lock<std::mutex> _{reaper->mutex};
+        reaper->events.push_back(std::move(event));
+      }
+    }
+  }
+}
+
+mkares_reaper_t *mkares_reaper_new_nonnull() {
+  mkares_reaper_uptr reaper{new mkares_reaper_t};
+  reaper->thread = std::thread{
+    mkares_reaper_loop,
+    reaper.get()
+  };
+  return reaper.release();
+}
+
+void mkares_reaper_movein_channel_and_query(
+    mkares_reaper_t *reaper, mkares_channel_t *channel,
+    mkares_query_t *query) {
+  if (reaper == nullptr || channel == nullptr || query == nullptr) {
+    MKARES_ABORT();
+  }
+  std::unique_lock<std::mutex> _{reaper->mutex};
+  mkares_dead_context_uptr dead_context{new mkares_dead_context};
+  dead_context->since = mkares_now();
+  dead_context->channel.reset(channel);
+  dead_context->query.reset(query);
+  reaper->contexts.push_back(std::move(dead_context));
+}
+
+mkares_event_t *mkares_reaper_get_next_event(
+    mkares_reaper_t *reaper) {
+  if (reaper == nullptr) MKARES_ABORT();
+  mkares_event_uptr event;
+  std::unique_lock<std::mutex> _{reaper->mutex};
+  if (!reaper->events.empty()) {
+    std::swap(event, reaper->events.front());
+    reaper->events.pop_front();
+  }
+  return event.release();
+}
+
+void mkares_reaper_delete(mkares_reaper_t *reaper) {
+  if (reaper != nullptr) {
+    reaper->stop = true;
+    reaper->thread.join();
+    delete reaper;
+  }
 }
 
 #endif  // MKARES_INLINE_IMPL
