@@ -326,7 +326,7 @@ struct mkares_response {
   int64_t good = false;
 };
 
-static void mkares_response_parse_hostent(
+static bool mkares_response_parse_hostent(
     const mkares_server_t *server, mkares_response_t *response, hostent *host) {
   if (host->h_name != nullptr) {
     response->cname = host->h_name;
@@ -354,10 +354,11 @@ static void mkares_response_parse_hostent(
                       {"ret", s},
                   }));
     if (s == nullptr) {
-      return;
+      return false;
     }
     response->addresses.push_back(s);
   }
+  return true;
 }
 
 static void mkares_server_recvparse(const mkares_server_t *server,
@@ -409,10 +410,9 @@ static void mkares_server_recvparse(const mkares_server_t *server,
   if (ret != ARES_SUCCESS) {
     return;
   }
-  // TODO(bassosimone): consider that this function MIGHT fail
-  mkares_response_parse_hostent(server, response.get(), host);
+  bool ok = mkares_response_parse_hostent(server, response.get(), host);
   ares_free_hostent(host);
-  response->good = true;
+  response->good = ok;
 }
 
 mkares_response_t *mkares_server_recv_nonnull(
