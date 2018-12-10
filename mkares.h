@@ -24,6 +24,17 @@ void mkares_query_set_id(mkares_query_t *query, uint16_t id);
 
 void mkares_query_delete(mkares_query_t *query);
 
+typedef struct mkares_response mkares_response_t;
+
+const char *mkares_response_get_cname(const mkares_response_t *response);
+
+size_t mkares_response_get_addresses_size(const mkares_response_t *response);
+
+const char *mkares_response_get_address_at(
+    const mkares_response_t *response, size_t idx);
+
+void mkares_response_delete(mkares_response_t *response);
+
 typedef struct mkares_channel mkares_channel_t;
 
 mkares_channel_t *mkares_channel_new_nonnull(void);
@@ -35,21 +46,10 @@ void mkares_channel_set_port(mkares_channel_t *channel, const char *port);
 int64_t mkares_channel_send(
     mkares_channel_t *channel, const mkares_query_t *query);
 
-typedef struct mkares_response mkares_response_t;
-
 mkares_response_t *mkares_channel_recv_nonnull(
     const mkares_channel_t *channel, const mkares_query_t *query);
 
 void mkares_channel_delete(mkares_channel_t *channel);
-
-const char *mkares_response_get_cname(const mkares_response_t *response);
-
-size_t mkares_response_get_addresses_size(const mkares_response_t *response);
-
-const char *mkares_response_get_address_at(
-    const mkares_response_t *response, size_t idx);
-
-void mkares_response_delete(mkares_response_t *response);
 
 #ifdef __cplusplus
 }  // extern "C"
@@ -145,6 +145,38 @@ void mkares_query_set_id(mkares_query_t *query, uint16_t id) {
 }
 
 void mkares_query_delete(mkares_query_t *query) { delete query; }
+
+struct mkares_response {
+  std::vector<std::string> addresses;
+  std::string cname;
+  int64_t good = false;
+};
+
+const char *mkares_response_get_cname(const mkares_response_t *response) {
+  if (response == nullptr) {
+    MKARES_ABORT();
+  }
+  return response->cname.c_str();
+}
+
+size_t mkares_response_get_addresses_size(const mkares_response_t *response) {
+  if (response == nullptr) {
+    MKARES_ABORT();
+  }
+  return response->addresses.size();
+}
+
+const char *mkares_response_get_address_at(
+    const mkares_response_t *response, size_t idx) {
+  if (response == nullptr || idx >= response->addresses.size()) {
+    MKARES_ABORT();
+  }
+  return response->addresses[idx].c_str();
+}
+
+void mkares_response_delete(mkares_response_t *response) {
+  delete response;
+}
 
 struct mkares_channel {
   std::string address;
@@ -309,23 +341,6 @@ int64_t mkares_channel_send(
   return err;
 }
 
-void mkares_channel_delete(mkares_channel_t *channel) {
-  if (channel != nullptr && channel->fd != -1) {
-#ifdef _WIN32
-    closesocket(static_cast<SOCKET>(channel->fd));
-#else
-    close(static_cast<int>(channel->fd));
-#endif
-  }
-  delete channel;  // gracefully handles nullptr
-}
-
-struct mkares_response {
-  std::vector<std::string> addresses;
-  std::string cname;
-  int64_t good = false;
-};
-
 static bool mkares_response_parse_hostent(
     const mkares_channel_t *channel, mkares_response_t *response, hostent *host) {
   if (host->h_name != nullptr) {
@@ -444,30 +459,15 @@ mkares_response_t *mkares_channel_recv_nonnull(
   return response.release();
 }
 
-const char *mkares_response_get_cname(const mkares_response_t *response) {
-  if (response == nullptr) {
-    MKARES_ABORT();
+void mkares_channel_delete(mkares_channel_t *channel) {
+  if (channel != nullptr && channel->fd != -1) {
+#ifdef _WIN32
+    closesocket(static_cast<SOCKET>(channel->fd));
+#else
+    close(static_cast<int>(channel->fd));
+#endif
   }
-  return response->cname.c_str();
-}
-
-size_t mkares_response_get_addresses_size(const mkares_response_t *response) {
-  if (response == nullptr) {
-    MKARES_ABORT();
-  }
-  return response->addresses.size();
-}
-
-const char *mkares_response_get_address_at(
-    const mkares_response_t *response, size_t idx) {
-  if (response == nullptr || idx >= response->addresses.size()) {
-    MKARES_ABORT();
-  }
-  return response->addresses[idx].c_str();
-}
-
-void mkares_response_delete(mkares_response_t *response) {
-  delete response;
+  delete channel;  // gracefully handles nullptr
 }
 
 #endif  // MKARES_INLINE_IMPL
