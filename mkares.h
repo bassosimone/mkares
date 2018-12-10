@@ -53,6 +53,9 @@ mkares_response_t *mkares_channel_sendrecv_nonnull(
 
 void mkares_channel_delete(mkares_channel_t *channel);
 
+// TODO(bassosimone): allow to wait in channel _after_ the first
+// request has been sent, so we'll fullfill all requirements.
+
 #ifdef __cplusplus
 }  // extern "C"
 
