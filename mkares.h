@@ -622,7 +622,7 @@ static void mkares_reaper_loop(mkares_reaper_t *reaper) {
         mkares_dead_context_uptr context;
         std::swap(context, reaper->contexts.front());
         reaper->contexts.pop_front();
-        if (context->channel->fd == -1) continue;
+        if (context->channel->fd == -1) continue;  // safety net
         contexts.push_back(std::move(context));
       }
     }
@@ -638,6 +638,8 @@ static void mkares_reaper_loop(mkares_reaper_t *reaper) {
     }
     constexpr int timeout = 250;
     // TODO(bassosimone): make sure we don't overflow the size
+    // TODO(bassosimone): on Windows specifically, we should sleep
+    // if there is no available file descriptor.
 #ifdef _WIN32
     int ret = WSAPoll(pfds.data(), pfds.size(), timeout);
 #else
@@ -657,10 +659,10 @@ static void mkares_reaper_loop(mkares_reaper_t *reaper) {
           (context->channel->timeout < 0 ||
            mkares_now() - context->since > context->channel->timeout)) {
         reaper->contexts.push_back(std::move(context));
-        continue;
+        continue;  // try again
       }
       if (readable_or_error.count(context->channel->fd) <= 0) {
-        continue;
+        continue;  // timed out (good!)
       }
       // If we arrive here, the channel is readable (or there has been an
       // error). So, re-execute the recv path and store the results.
@@ -699,8 +701,7 @@ void mkares_reaper_movein_channel_and_query(
   reaper->contexts.push_back(std::move(dead_context));
 }
 
-mkares_event_t *mkares_reaper_get_next_event(
-    mkares_reaper_t *reaper) {
+mkares_event_t *mkares_reaper_get_next_event(mkares_reaper_t *reaper) {
   if (reaper == nullptr) MKARES_ABORT();
   mkares_event_uptr event;
   std::unique_lock<std::mutex> _{reaper->mutex};
