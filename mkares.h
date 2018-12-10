@@ -406,14 +406,16 @@ static bool mkares_channel_send_buffer(
 }
 
 // mkares_channel_send sends @p query over @p channel logging events
-// in @p response. Aborts if passed null pointers. Returns a bool value
-// indicating whether it succeeded or not.
+// in @p response. Aborts if passed null pointers, or if @p channel
+// socket's is already connected. Returns a bool value indicating whether
+// it succeeded or not.
 static bool
 mkares_channel_send(mkares_channel_t *channel, const mkares_query_t *query,
                     mkares_response_uptr &response) {
   if (channel == nullptr || query == nullptr || response == nullptr) {
     MKARES_ABORT();
   }
+  if (channel->fd != -1) MKARES_ABORT();
   uint8_t *buff = nullptr;
   int bufsiz = 0;
   int ret = ares_create_query(query->name.c_str(), query->dnsclass, query->type,
