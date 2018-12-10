@@ -60,7 +60,8 @@ struct mkares_query_deleter {
   }
 };
 
-using mkares_query_uptr = std::unique_ptr<mkares_query_t, mkares_query_deleter>;
+using mkares_query_uptr = std::unique_ptr<mkares_query_t,
+                                          mkares_query_deleter>;
 
 struct mkares_channel_deleter {
   void operator()(mkares_channel_t *channel) {
@@ -120,6 +121,9 @@ struct mkares_query {
   uint16_t id = 0;
   int type = ns_t_a;
 };
+
+// TODO(bassosimone): as suggested by @irl we SHOULD NOT emit requests
+// with predictable queries to avoid being fingerprintable.
 
 mkares_query_t *mkares_query_new_nonnull() { return new mkares_query_t; }
 
