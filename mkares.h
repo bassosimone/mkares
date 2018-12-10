@@ -358,9 +358,12 @@ static bool mkares_channel_connect(
 }
 
 // mkares_maybe_base64 returns a base64 encoded string if @p count is
-// positive. Otherwise this function returns an empty string.
+// positive. Otherwise, if @p count is negative (i.e. recv or send failed)
+// or too large (should not happen), it returns an empty string. It will
+// instead abort if it's pased a null pointer @p buff.
 template <typename BufferType, typename SizeType>
 std::string mkares_maybe_base64(const BufferType buff, SizeType count) {
+  if (buff == nullptr) MKARES_ABORT();
   if (count <= 0 || static_cast<uint64_t>(count) > SIZE_MAX) {
     return "";
   }
