@@ -376,7 +376,8 @@ std::string mkares_maybe_base64(const BufferType buff, SizeType count) {
 // @p base over @p channel and logs events in @p response. This function will
 // abort if passed any null pointer, if @p count is not positive, or if
 // @p channel is already connected. Returns a boolean valud indicating whether
-// it succeded or not.
+// it succeded or not. Note that not being able to send a full packet with
+// @p count bytes is considered a failure.
 static bool mkares_channel_send_buffer(
     mkares_channel_t *channel, const uint8_t *base, size_t count,
     mkares_response_uptr &response) {
