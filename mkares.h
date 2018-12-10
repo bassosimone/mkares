@@ -445,7 +445,7 @@ static bool mkares_channel_send_buffer(
   MKARES_EVADD(response, (nlohmann::json{
                              {"func", "send"},
                              {"ret", n},
-                             {"data", mkares_maybe_base64(base, n)},
+                             {"data", mkares_maybe_base64(base, count)},
                          }));
   if (n < 0 || static_cast<size_t>(n) != count) return false;
   return true;
