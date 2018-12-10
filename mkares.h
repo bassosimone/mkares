@@ -43,11 +43,8 @@ void mkares_channel_set_address(mkares_channel_t *channel, const char *address);
 
 void mkares_channel_set_port(mkares_channel_t *channel, const char *port);
 
-int64_t mkares_channel_send(
+mkares_response_t *mkares_channel_sendrecv_nonnull(
     mkares_channel_t *channel, const mkares_query_t *query);
-
-mkares_response_t *mkares_channel_recv_nonnull(
-    const mkares_channel_t *channel, const mkares_query_t *query);
 
 void mkares_channel_delete(mkares_channel_t *channel);
 
@@ -324,8 +321,8 @@ static int64_t mkares_channel_send_buffer(
   return 0;
 }
 
-int64_t mkares_channel_send(
-    mkares_channel_t *channel, const mkares_query_t *query) {
+static int64_t mkares_channel_send(mkares_channel_t *channel,
+                                   const mkares_query_t *query) {
   if (channel == nullptr || query == nullptr) {
     MKARES_ABORT();
   }
@@ -439,12 +436,12 @@ static void mkares_channel_recvparse(const mkares_channel_t *channel,
   response->good = ok;
 }
 
-mkares_response_t *mkares_channel_recv_nonnull(
-    const mkares_channel_t *channel, const mkares_query_t *query) {
-  if (channel == nullptr || query == nullptr) {
+static void mkares_channel_recv(const mkares_channel_t *channel,
+                                const mkares_query_t *query,
+                                mkares_response_uptr &response) {
+  if (channel == nullptr || query == nullptr || response == nullptr) {
     MKARES_ABORT();
   }
-  mkares_response_uptr response{new mkares_response_t};
   pollfd pfd{};
   pfd.events = POLLIN;
   int64_t t = channel->timeout;
@@ -461,10 +458,22 @@ mkares_response_t *mkares_channel_recv_nonnull(
                           {"func", "poll"},
                           {"ret", ret},
                       }));
-  if (ret <= 0) {
+  if (ret > 0) {
+    mkares_channel_recvparse(channel, query, response);
+  }
+}
+
+mkares_response_t *mkares_channel_sendrecv_nonnull(
+    mkares_channel_t *channel, const mkares_query_t *query) {
+  if (channel == nullptr || query == nullptr) {
+    MKARES_ABORT();
+  }
+  mkares_response_uptr response{new mkares_response_t};
+  int64_t err = mkares_channel_send(channel, query);
+  if (err != 0) {
     return response.release();
   }
-  mkares_channel_recvparse(channel, query, response);
+  mkares_channel_recv(channel, query, response);
   return response.release();
 }
 
