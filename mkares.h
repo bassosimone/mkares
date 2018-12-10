@@ -607,8 +607,12 @@ struct mkares_reaper {
   std::thread thread;
 };
 
-static void mkares_reaper_loop(
-    mkares_reaper_t *reaper) {
+// mkares_reaper_loop loops over @p reaper's contexts until the @p reaper
+// is ordered to stop. For each context, it waits until either its channel
+// socket becomes readable or there is a timeout. When it's readable, it
+// reads and saves the response. After reading a response, or in case there
+// is a timeout, the context is then discarded.
+static void mkares_reaper_loop(mkares_reaper_t *reaper) {
   if (reaper == nullptr) MKARES_ABORT();
   while (!reaper->stop) {
     std::deque<mkares_dead_context_uptr> contexts;
