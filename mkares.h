@@ -114,6 +114,9 @@ using mkares_response_uptr = std::unique_ptr<mkares_response_t,
 #define MKARES_HOOK(T, V)  // Nothing
 #endif
 
+// mkares_query
+// ------------
+
 struct mkares_query {
   std::string name;
   int dnsclass = ns_c_in;
@@ -146,6 +149,9 @@ void mkares_query_set_id(mkares_query_t *query, uint16_t id) {
 
 void mkares_query_delete(mkares_query_t *query) { delete query; }
 
+// mkares_response
+// ---------------
+
 struct mkares_response {
   std::vector<std::string> addresses;
   std::string cname;
@@ -177,6 +183,9 @@ const char *mkares_response_get_address_at(
 void mkares_response_delete(mkares_response_t *response) {
   delete response;
 }
+
+// mkares_channel
+// --------------
 
 struct mkares_channel {
   std::string address;
