@@ -455,7 +455,7 @@ mkares_response_parse_hostent(mkares_response_uptr &response, hostent *host) {
         if (host->h_length != 16) MKARES_ABORT();
         s = inet_ntop(AF_INET6, *addr, name, sizeof(name));
         break;
-      default: MKARES_ABORT();
+      default: MKARES_ABORT();  // should not happen
     }
     MKARES_EVADD(response, (nlohmann::json{
                                {"func", "inet_ntop"},
