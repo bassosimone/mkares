@@ -33,6 +33,11 @@ size_t mkares_response_get_addresses_size(const mkares_response_t *response);
 const char *mkares_response_get_address_at(
     const mkares_response_t *response, size_t idx);
 
+size_t mkares_response_get_events_size(const mkares_response_t *response);
+
+const char *mkares_response_get_event_at(
+    const mkares_response_t *response, size_t idx);
+
 void mkares_response_delete(mkares_response_t *response);
 
 typedef struct mkares_channel mkares_channel_t;
@@ -155,6 +160,7 @@ void mkares_query_delete(mkares_query_t *query) { delete query; }
 
 struct mkares_response {
   std::vector<std::string> addresses;
+  std::vector<std::string> events;
   std::string cname;
   int64_t good = false;
 };
@@ -179,6 +185,21 @@ const char *mkares_response_get_address_at(
     MKARES_ABORT();
   }
   return response->addresses[idx].c_str();
+}
+
+size_t mkares_response_get_events_size(const mkares_response_t *response) {
+  if (response == nullptr) {
+    MKARES_ABORT();
+  }
+  return response->events.size();
+}
+
+const char *mkares_response_get_event_at(
+    const mkares_response_t *response, size_t idx) {
+  if (response == nullptr || idx >= response->events.size()) {
+    MKARES_ABORT();
+  }
+  return response->events[idx].c_str();
 }
 
 void mkares_response_delete(mkares_response_t *response) {
