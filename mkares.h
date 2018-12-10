@@ -4,6 +4,8 @@
 #ifndef MEASUREMENT_KIT_MKARES_H
 #define MEASUREMENT_KIT_MKARES_H
 
+/// @file mkares.h. Measurement Kit c-ares wrappers.
+
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -12,62 +14,141 @@
 extern "C" {
 #endif  // __cplusplus
 
+/// mkares_query_t is a DNS query.
 typedef struct mkares_query mkares_query_t;
 
+/// mkares_query_new_nonnull creates a DNS query. This function never
+/// returns null and will abort if memory allocations fail.
 mkares_query_t *mkares_query_new_nonnull(void);
 
+/// mkares_query_set_name sets the name to query for. You must set this
+/// value for the query to be valid. Aborts if passed null pointers.
 void mkares_query_set_name(mkares_query_t *query, const char *name);
 
+/// mkares_query_set_type_AAAA queries for AAAA. Default is to query for
+/// A. Aborts if @p query is null.
 void mkares_query_set_type_AAAA(mkares_query_t *query);
 
+/// mkares_query_delete destroys @p query, which may be null.
 void mkares_query_delete(mkares_query_t *query);
 
+/// mkares_response_t is the response to a DNS query.
 typedef struct mkares_response mkares_response_t;
 
+/// mkares_response_good returns true if the response is successful (i.e.
+/// we have at least one IP address) and false otherwise. This function will
+/// also abort if passed a null @p response argument.
+int64_t mkares_response_good(const mkares_response_t *response);
+
+/// mkares_response_get_cname returns the CNAME. This function always returns
+/// a valid string owned by @p response. If no CNAME is know, this function
+/// will return an empty string. It will abort if @p response is null.
 const char *mkares_response_get_cname(const mkares_response_t *response);
 
+/// mkares_response_get_addresses_size returns the number of addresses in the
+/// response, which may be zero on failure. Aborts if @p response is null.
 size_t mkares_response_get_addresses_size(const mkares_response_t *response);
 
+/// mkares_response_get_address_at returns the address at index @p idx. This
+/// function aborts if @p response is null or @p idx is out of bounds with
+/// respect to the addresses size. The returned string is owned by the @p
+/// response instance and will be destroyed when it is destroyed.
 const char *mkares_response_get_address_at(
     const mkares_response_t *response, size_t idx);
 
+/// mkares_response_get_events_size is like mkares_response_get_addresses_size
+/// but for events rather than addresses. Events are a sequence of string
+/// serialised JSON objects that describe all the events occurring at the API
+/// level during the execution of the query. The general event is like:
+///
+/// ```json
+/// {"func":"inet_ntop","now":35200981, ...}
+/// ```
+///
+/// Where `func` is the API name, `now` is the number of milliseconds since
+/// the zero of the C++ steady clock, and additional fields may include, for
+/// example, the return value of an API, and the data that has been sent
+/// or received. Because DNS is a binary protocol, the data will be encoded
+/// as a base64 string. In case of API failure, the data will instead be
+/// represented as an empty string, if no data has been read.
 size_t mkares_response_get_events_size(const mkares_response_t *response);
 
+/// mkares_response_get_event_at is like mkares_response_get_address_at
+/// except that it returns events rather than addresses. The format of events
+/// is documented in mkares_response_get_events_size docs.
 const char *mkares_response_get_event_at(
     const mkares_response_t *response, size_t idx);
 
+/// mkares_response_delete destroys @p response, which may be null.
 void mkares_response_delete(mkares_response_t *response);
 
+/// mkares_channel_t is a socket for sending a DNS request.
 typedef struct mkares_channel mkares_channel_t;
 
+/// mkares_channel_new_nonnull creates a new channel. This function will always
+/// return a valid pointer and will abort if any malloc fails.
 mkares_channel_t *mkares_channel_new_nonnull(void);
 
+/// mkares_channel_set_address sets the server address. The address must be
+/// a valid IPv4 or IPv6 address. This function aborts if passed null pointers.
 void mkares_channel_set_address(mkares_channel_t *channel, const char *address);
 
+/// mkares_channel_set_address sets the server port. The port must be a valid
+/// port number. This function aborts if passed null pointers.
 void mkares_channel_set_port(mkares_channel_t *channel, const char *port);
 
+/// mkares_channel_sendrecv_nonnull sends @p query and receives a response
+/// using @p channel. This function will always return a valid pointer
+/// and will abort on memory allocation errors. It will also abort when
+/// passed null pointer arguments. To check whether the returned response
+/// succeeded, you mkares_reponse_good.
 mkares_response_t *mkares_channel_sendrecv_nonnull(
     mkares_channel_t *channel, const mkares_query_t *query);
 
+/// mkares_channel_delete destroys @p channel, which may be null.
 void mkares_channel_delete(mkares_channel_t *channel);
 
+/// mkares_event_t is an asynchronous event occurring when a channel
+/// is being managed by the reaper (described below).
 typedef struct mkares_event mkares_event_t;
 
+/// mkares_event_str returns the string representation of the event. This
+/// is a serialised JSON as described above in the documentation of the
+/// mkares_response_get_events_size function. This function will abort if
+/// the @p event argument is a null pointer.
 const char *mkares_event_str(const mkares_event_t *event);
 
+/// mkares_event_delete destroys @p event, which may be null.
 void mkares_event_delete(mkares_event_t *event);
 
+/// mkares_reaper_t will manage channels where a response has already been
+/// received, to check whether subsequent responses are received. This
+/// operation will be done by polling several channels at once in a background
+/// thread. If subsequent responses are received they're saved in the reaper.
 typedef struct mkares_reaper mkares_reaper_t;
 
+/// mkares_reaper_new_nonnull creates a new reaper. This function will never
+/// fail and will always return a valid pointer. Aborts on malloc error.
 mkares_reaper_t *mkares_reaper_new_nonnull(void);
 
+/// mkares_reaper_movein_channel_and_query transfers the ownership of @p
+/// channel and @p query to @p reaper. You must not use either of them after
+/// this function has been called. This function will abort if passed any
+/// null pointer argument.
 void mkares_reaper_movein_channel_and_query(
     mkares_reaper_t *reaper,
     mkares_channel_t *channel, mkares_query_t *query);
 
+//TODO(bassosimone): specify the format of the returned events
+// that should be such that one can easily link with other data.
+
+/// mkares_reaper_get_next_event returns the next event registered by the
+/// reaper. This function may return a null pointer if no events have been
+/// saved in @p reaper. This function aborts if @p reaper is null.
 mkares_event_t *mkares_reaper_get_next_event(
     mkares_reaper_t *reaper);
 
+/// mkares_repaer_delete destroys @p repear, which may be null.
 void mkares_reaper_delete(mkares_reaper_t *reaper);
 
 #ifdef __cplusplus
@@ -76,51 +157,62 @@ void mkares_reaper_delete(mkares_reaper_t *reaper);
 #include <memory>
 #include <string>
 
+/// mkares_query_deleter is a deleter for mkares_query_t.
 struct mkares_query_deleter {
   void operator()(mkares_query_t *query) {
     mkares_query_delete(query);
   }
 };
 
+/// mkares_query_deleter is a unique pointer to mkares_query_t.
 using mkares_query_uptr = std::unique_ptr<mkares_query_t,
                                           mkares_query_deleter>;
 
+/// mkares_response_deleter is a deleter for mkares_response_t.
 struct mkares_response_deleter {
   void operator()(mkares_response_t *response) {
     mkares_response_delete(response);
   }
 };
 
+/// mkares_response_deleter is a unique pointer to mkares_response_t.
 using mkares_response_uptr = std::unique_ptr<mkares_response_t,
                                              mkares_response_deleter>;
 
+/// mkares_channel_deleter is a deleter for mkares_channel_t.
 struct mkares_channel_deleter {
   void operator()(mkares_channel_t *channel) {
     mkares_channel_delete(channel);
   }
 };
 
+/// mkares_channel_deleter is a unique pointer to mkares_channel_t.
 using mkares_channel_uptr = std::unique_ptr<mkares_channel_t,
                                             mkares_channel_deleter>;
 
+/// mkares_event_deleter is a deleter for mkares_event_t.
 struct mkares_event_deleter {
   void operator()(mkares_event_t *event) {
     mkares_event_delete(event);
   }
 };
 
+/// mkares_event_deleter is a unique pointer to mkares_event_t.
 using mkares_event_uptr = std::unique_ptr<mkares_event_t,
                                           mkares_event_deleter>;
 
+/// mkares_repaer_deleter is a deleter for mkares_repaer_t.
 struct mkares_reaper_deleter {
   void operator()(mkares_reaper_t *reaper) {
     mkares_reaper_delete(reaper);
   }
 };
 
+/// mkares_repaer_deleter is a unique pointer to mkares_repaer_t.
 using mkares_reaper_uptr = std::unique_ptr<mkares_reaper_t,
                                            mkares_reaper_deleter>;
 
+// MKARES_INLINE_IMPL controls whether to inline the implementation.
 #ifdef MKARES_INLINE_IMPL
 
 #ifdef _WIN32
@@ -150,10 +242,12 @@ using mkares_reaper_uptr = std::unique_ptr<mkares_reaper_t,
 
 #include "mkdata.h"
 
+// MKARES_ABORT allows to check in unit tests that we correctly abort.
 #ifndef MKARES_ABORT
 #define MKARES_ABORT() abort()
 #endif
 
+// MKARES_HOOK allows to override a return value in unit tests.
 #ifndef MKARES_HOOK
 #define MKARES_HOOK(T, V)  // Nothing
 #endif
@@ -161,8 +255,12 @@ using mkares_reaper_uptr = std::unique_ptr<mkares_reaper_t,
 // mkares_ids
 // ----------
 
+// mkares_ids allows to generate unique, random query IDs.
 struct mkares_ids {
+  // ids contains the IDs currently in use.
   std::set<uint16_t> ids;
+
+  // mutex protects ids against concurrent accesses.
   std::mutex mutex;
 };
 
@@ -212,10 +310,18 @@ static void mkares_ids_put(uint16_t id) {
 // mkares_query
 // ------------
 
+// mkares_query is the private data bound to mkares_query_t.
 struct mkares_query {
+  // name is the name of the query.
   std::string name;
+
+  // dnsclass is the class of the query.
   int dnsclass = ns_c_in;
+
+  // id is the ID of the query.
   uint16_t id = mkares_ids_get();
+
+  // type is the type of the query.
   int type = ns_t_a;
 };
 
@@ -245,12 +351,27 @@ void mkares_query_delete(mkares_query_t *query) {
 // mkares_response
 // ---------------
 
+// mkares_response is the private data of mkares_response_t.
 struct mkares_response {
+  // addresses contains the resolved addresses.
   std::vector<std::string> addresses;
+
+  // events contains the events occurred when performing the query.
   std::vector<std::string> events;
+
+  // cname contains the response CNAME.
   std::string cname;
+
+  // good indicates whether the query succeeded.
   int64_t good = false;
 };
+
+int64_t mkares_response_good(const mkares_response_t *response) {
+  if (response == nullptr) {
+    MKARES_ABORT();
+  }
+  return response->good;
+}
 
 const char *mkares_response_get_cname(const mkares_response_t *response) {
   if (response == nullptr) {
@@ -296,10 +417,18 @@ void mkares_response_delete(mkares_response_t *response) {
 // mkares_channel
 // --------------
 
+// mkares_channels is the private data of mkares_channel_t.
 struct mkares_channel {
+  // address is the address of the server.
   std::string address;
+
+  // port is the port of the server.
   std::string port = "53";
-  int64_t timeout = 3000;  // millisecond
+
+  // timeout is the query timeout in millisecond.
+  int64_t timeout = 3000;
+
+  // fd is the socket.
   int64_t fd = -1;
 };
 
@@ -623,7 +752,9 @@ void mkares_channel_delete(mkares_channel_t *channel) {
 // mkares_event
 // ------------
 
+// mkares_event is the private data of mkares_event_t.
 struct mkares_event {
+  // s is the serialised event.
   std::string s;
 };
 
@@ -637,19 +768,39 @@ void mkares_event_delete(mkares_event_t *event) { delete event; }
 // mkares_reaper
 // --------------------
 
+// mkares_dead_context is the context of a dying channel and query.
 struct mkares_dead_context {
+  // since saves the number of milliseconds when we started monitoring
+  // this channel and query for subsequent responses.
   int64_t since = 0;
+
+  // channel is the channel previously used for sending a query and that
+  // already received a response for such query.
   mkares_channel_uptr channel;
+
+  // query is the query that was sent.
   mkares_query_uptr query;
 };
 
+// mkares_dead_context_uptr is a unique pointer to mkares_dead_context.
 using mkares_dead_context_uptr = std::unique_ptr<mkares_dead_context>;
 
+// mkares_reaper is the private data of mkares_reaper_t.
 struct mkares_reaper {
+  // context is the list of contexts we're monitoring.
   std::deque<mkares_dead_context_uptr> contexts;
+
+  // events contains the events occurred when receiving subsequent
+  // responses after we've already received a response.
   std::deque<mkares_event_uptr> events;
+
+  // mutex protects data structure against concurrent access.
   std::mutex mutex;
+
+  // stop is a flag used to stop the worker thread.
   std::atomic_bool stop{false};
+
+  // thread is a worker thread that checks for subsequent responses.
   std::thread thread;
 };
 
