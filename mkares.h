@@ -309,6 +309,17 @@ int64_t mkares_server_send(
   return err;
 }
 
+void mkares_server_delete(mkares_server_t *server) {
+  if (server != nullptr && server->fd != -1) {
+#ifdef _WIN32
+    closesocket(static_cast<SOCKET>(server->fd));
+#else
+    close(static_cast<int>(server->fd));
+#endif
+  }
+  delete server;  // gracefully handles nullptr
+}
+
 struct mkares_response {
   std::vector<std::string> addresses;
   std::string cname;
@@ -349,39 +360,11 @@ static void mkares_response_parse_hostent(
   }
 }
 
-void mkares_server_delete(mkares_server_t *server) {
-  if (server != nullptr && server->fd != -1) {
-#ifdef _WIN32
-    closesocket(static_cast<SOCKET>(server->fd));
-#else
-    close(static_cast<int>(server->fd));
-#endif
-  }
-  delete server;  // gracefully handles nullptr
-}
-
-mkares_response_t *mkares_server_recv_nonnull(
-    const mkares_server_t *server, const mkares_query_t *query) {
-  if (server == nullptr) {
+static void mkares_server_recvparse(const mkares_server_t *server,
+                                    const mkares_query_t *query,
+                                    mkares_response_uptr &response) {
+  if (server == nullptr || query == nullptr || response == nullptr) {
     MKARES_ABORT();
-  }
-  mkares_response_uptr response{new mkares_response_t};
-  pollfd pfd{};
-  pfd.events = POLLIN;
-#ifdef _WIN32
-  pfd.fd = static_cast<SOCKET>(server->fd);
-  int ret = WSAPoll(&pfd, 1, server->timeout);
-#else
-  pfd.fd = static_cast<int>(server->fd);
-  int ret = poll(&pfd, 1, server->timeout);
-#endif
-  MKARES_HOOK(poll, ret);
-  MKARES_LOG(server, (nlohmann::json{
-                         {"func", "poll"},
-                         {"ret", ret},
-                     }));
-  if (ret <= 0) {
-    return response.release();
   }
   char buff[2048];
 #ifdef _WIN32
@@ -396,14 +379,15 @@ mkares_response_t *mkares_server_recv_nonnull(
                          {"data", mkares_maybe_base64(buff, n)},
                      }));
   if (n <= 0) {
-    return response.release();
+    return;
   }
   hostent *host = nullptr;
+  int ret = 0;
   switch (query->type) {
     case ns_t_a:
       ret = ares_parse_a_reply(
           reinterpret_cast<unsigned char *>(buff),
-          static_cast<int>(n), &host, nullptr, 0);
+          static_cast<int>(n), &host, nullptr, nullptr);
       MKARES_HOOK(ares_parse_a_reply, ret);
       MKARES_LOG(server, (nlohmann::json{
                              {"func", "ares_parse_a_reply"},
@@ -413,7 +397,7 @@ mkares_response_t *mkares_server_recv_nonnull(
     case ns_t_aaaa:
       ret = ares_parse_aaaa_reply(
           reinterpret_cast<unsigned char *>(buff),
-          static_cast<int>(n), &host, nullptr, 0);
+          static_cast<int>(n), &host, nullptr, nullptr);
       MKARES_HOOK(ares_parse_aaaa_reply, ret);
       MKARES_LOG(server, (nlohmann::json{
                              {"func", "ares_parse_aaaa_reply"},
@@ -423,11 +407,40 @@ mkares_response_t *mkares_server_recv_nonnull(
     default: MKARES_ABORT();  // should not happen
   }
   if (ret != ARES_SUCCESS) {
-    return response.release();
+    return;
   }
+  // TODO(bassosimone): consider that this function MIGHT fail
   mkares_response_parse_hostent(server, response.get(), host);
   ares_free_hostent(host);
   response->good = true;
+}
+
+mkares_response_t *mkares_server_recv_nonnull(
+    const mkares_server_t *server, const mkares_query_t *query) {
+  if (server == nullptr || query == nullptr) {
+    MKARES_ABORT();
+  }
+  mkares_response_uptr response{new mkares_response_t};
+  pollfd pfd{};
+  pfd.events = POLLIN;
+  int64_t t = server->timeout;
+  t = (t < 0) ? -1 : (t < INT_MAX) ? t : INT_MAX;
+#ifdef _WIN32
+  pfd.fd = static_cast<SOCKET>(server->fd);
+  int ret = WSAPoll(&pfd, 1, static_cast<int>(t));
+#else
+  pfd.fd = static_cast<int>(server->fd);
+  int ret = poll(&pfd, 1, static_cast<int>(t));
+#endif
+  MKARES_HOOK(poll, ret);
+  MKARES_LOG(server, (nlohmann::json{
+                         {"func", "poll"},
+                         {"ret", ret},
+                     }));
+  if (ret <= 0) {
+    return response.release();
+  }
+  mkares_server_recvparse(server, query, response);
   return response.release();
 }
 
