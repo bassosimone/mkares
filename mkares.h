@@ -24,23 +24,23 @@ void mkares_query_set_id(mkares_query_t *query, uint16_t id);
 
 void mkares_query_delete(mkares_query_t *query);
 
-typedef struct mkares_server mkares_server_t;
+typedef struct mkares_channel mkares_channel_t;
 
-mkares_server_t *mkares_server_new_nonnull(void);
+mkares_channel_t *mkares_channel_new_nonnull(void);
 
-void mkares_server_set_address(mkares_server_t *server, const char *address);
+void mkares_channel_set_address(mkares_channel_t *channel, const char *address);
 
-void mkares_server_set_port(mkares_server_t *server, const char *port);
+void mkares_channel_set_port(mkares_channel_t *channel, const char *port);
 
-int64_t mkares_server_send(
-    mkares_server_t *server, const mkares_query_t *query);
+int64_t mkares_channel_send(
+    mkares_channel_t *channel, const mkares_query_t *query);
 
 typedef struct mkares_response mkares_response_t;
 
-mkares_response_t *mkares_server_recv_nonnull(
-    const mkares_server_t *server, const mkares_query_t *query);
+mkares_response_t *mkares_channel_recv_nonnull(
+    const mkares_channel_t *channel, const mkares_query_t *query);
 
-void mkares_server_delete(mkares_server_t *server);
+void mkares_channel_delete(mkares_channel_t *channel);
 
 const char *mkares_response_get_cname(const mkares_response_t *response);
 
@@ -65,14 +65,14 @@ struct mkares_query_deleter {
 
 using mkares_query_uptr = std::unique_ptr<mkares_query_t, mkares_query_deleter>;
 
-struct mkares_server_deleter {
-  void operator()(mkares_server_t *server) {
-    mkares_server_delete(server);
+struct mkares_channel_deleter {
+  void operator()(mkares_channel_t *channel) {
+    mkares_channel_delete(channel);
   }
 };
 
-using mkares_server_uptr = std::unique_ptr<mkares_server_t,
-                                           mkares_server_deleter>;
+using mkares_channel_uptr = std::unique_ptr<mkares_channel_t,
+                                            mkares_channel_deleter>;
 
 struct mkares_response_deleter {
   void operator()(mkares_response_t *response) {
@@ -146,7 +146,7 @@ void mkares_query_set_id(mkares_query_t *query, uint16_t id) {
 
 void mkares_query_delete(mkares_query_t *query) { delete query; }
 
-struct mkares_server {
+struct mkares_channel {
   std::string address;
   std::string port = "53";
   int64_t timeout = 3000;  // millisecond
@@ -154,20 +154,20 @@ struct mkares_server {
   FILE *logfile = stderr;
 };
 
-mkares_server_t *mkares_server_new_nonnull() { return new mkares_server; }
+mkares_channel_t *mkares_channel_new_nonnull() { return new mkares_channel; }
 
-void mkares_server_set_address(mkares_server_t *server, const char *address) {
-  if (server == nullptr || address == nullptr) {
+void mkares_channel_set_address(mkares_channel_t *channel, const char *address) {
+  if (channel == nullptr || address == nullptr) {
     MKARES_ABORT();
   }
-  server->address = address;
+  channel->address = address;
 }
 
-void mkares_server_set_port(mkares_server_t *server, const char *port) {
-  if (server == nullptr || port == nullptr) {
+void mkares_channel_set_port(mkares_channel_t *channel, const char *port) {
+  if (channel == nullptr || port == nullptr) {
     MKARES_ABORT();
   }
-  server->port = port;
+  channel->port = port;
 }
 
 // MKARES_LOG logs @p Event using @p Query's logfile.
@@ -181,63 +181,63 @@ void mkares_server_set_port(mkares_server_t *server, const char *port) {
   } while (0)
 
 static int64_t
-mkares_server_connect_addrinfo(mkares_server_t *server, addrinfo *aip) {
-  server->fd = static_cast<int64_t>(socket(aip->ai_family, SOCK_DGRAM, 0));
-  MKARES_HOOK(socket, server->fd);
-  MKARES_LOG(server, (nlohmann::json{
-                    {"func", "socket"},
-                    {"ret", server->fd},
-                }));
-  if (server->fd == -1) {
+mkares_channel_connect_addrinfo(mkares_channel_t *channel, addrinfo *aip) {
+  channel->fd = static_cast<int64_t>(socket(aip->ai_family, SOCK_DGRAM, 0));
+  MKARES_HOOK(socket, channel->fd);
+  MKARES_LOG(channel, (nlohmann::json{
+                          {"func", "socket"},
+                          {"ret", channel->fd},
+                      }));
+  if (channel->fd == -1) {
     return -1;
   }
   int ret = connect(
 #ifdef _WIN32
-      static_cast<SOCKET>(server->fd),
+      static_cast<SOCKET>(channel->fd),
 #else
-      static_cast<int>(server->fd),
+      static_cast<int>(channel->fd),
 #endif
       aip->ai_addr, aip->ai_addrlen);
   MKARES_HOOK(connect, ret);
-  MKARES_LOG(server, (nlohmann::json{
-                    {"func", "connect"},
-                    {"ret", ret},
-                }));
+  MKARES_LOG(channel, (nlohmann::json{
+                          {"func", "connect"},
+                          {"ret", ret},
+                      }));
   if (ret != 0) {
 #ifdef _WIN32
-    (void)closesocket(static_cast<SOCKET>(server->fd));
+    (void)closesocket(static_cast<SOCKET>(channel->fd));
 #else
-    (void)close(static_cast<int>(server->fd));
+    (void)close(static_cast<int>(channel->fd));
 #endif
-    server->fd = -1;
+    channel->fd = -1;
     return -1;
   }
   return 0;
 }
 
-static int64_t mkares_server_connect(mkares_server_t *server) {
-  if (server == nullptr) {
+static int64_t mkares_channel_connect(mkares_channel_t *channel) {
+  if (channel == nullptr) {
     MKARES_ABORT();
   }
-  if (server->fd != -1) {
+  if (channel->fd != -1) {
     return 0;
   }
   addrinfo hints{};
   hints.ai_flags |= AI_NUMERICHOST | AI_NUMERICSERV;
   hints.ai_socktype = SOCK_DGRAM;
   addrinfo *rp = nullptr;
-  int ret = getaddrinfo(server->address.c_str(),
-                        server->port.c_str(),
+  int ret = getaddrinfo(channel->address.c_str(),
+                        channel->port.c_str(),
                         &hints, &rp);
   MKARES_HOOK(getaddrinfo, ret);
-  MKARES_LOG(server, (nlohmann::json{
-                    {"func", "getaddrinfo"},
-                    {"ret", ret},
-                }));
+  MKARES_LOG(channel, (nlohmann::json{
+                          {"func", "getaddrinfo"},
+                          {"ret", ret},
+                      }));
   if (ret != 0) {
     return -1;
   }
-  int64_t err = mkares_server_connect_addrinfo(server, rp);
+  int64_t err = mkares_channel_connect_addrinfo(channel, rp);
   freeaddrinfo(rp);
   return err;
 }
@@ -255,9 +255,9 @@ std::string mkares_maybe_base64(const BufferType buff, SizeType count) {
   return mkdata_moveout_base64(data);
 }
 
-static int64_t mkares_server_send_buffer(
-    mkares_server_t *server, const uint8_t *base, size_t count) {
-  int64_t err = mkares_server_connect(server);
+static int64_t mkares_channel_send_buffer(
+    mkares_channel_t *channel, const uint8_t *base, size_t count) {
+  int64_t err = mkares_channel_connect(channel);
   if (err != 0) {
     return err;
   }
@@ -265,27 +265,27 @@ static int64_t mkares_server_send_buffer(
   if (count > INT_MAX) {
     MKARES_ABORT();
   }
-  int n = send(static_cast<SOCKET>(server->fd),
+  int n = send(static_cast<SOCKET>(channel->fd),
                reinterpret_cast<const char *>(base),
                static_cast<int>(count), 0);
 #else
-  ssize_t n = send(static_cast<int>(server->fd), base, count, 0);
+  ssize_t n = send(static_cast<int>(channel->fd), base, count, 0);
 #endif
   MKARES_HOOK(send, n);
-  MKARES_LOG(server, (nlohmann::json{
-                    {"func", "send"},
-                    {"ret", n},
-                    {"data", mkares_maybe_base64(base, n)},
-                }));
+  MKARES_LOG(channel, (nlohmann::json{
+                          {"func", "send"},
+                          {"ret", n},
+                          {"data", mkares_maybe_base64(base, n)},
+                      }));
   if (n < 0 || static_cast<size_t>(n) != count) {
     return -1;
   }
   return 0;
 }
 
-int64_t mkares_server_send(
-    mkares_server_t *server, const mkares_query_t *query) {
-  if (server == nullptr || query == nullptr) {
+int64_t mkares_channel_send(
+    mkares_channel_t *channel, const mkares_query_t *query) {
+  if (channel == nullptr || query == nullptr) {
     MKARES_ABORT();
   }
   uint8_t *buff = nullptr;
@@ -293,31 +293,31 @@ int64_t mkares_server_send(
   int ret = ares_create_query(query->name.c_str(), query->dnsclass, query->type,
                               query->id, 1, &buff, &bufsiz, 0);
   MKARES_HOOK(ares_create_query, ret);
-  MKARES_LOG(server, (nlohmann::json{
-                    {"func", "ares_create_query"},
-                    {"ret", ret},
-                }));
+  MKARES_LOG(channel, (nlohmann::json{
+                          {"func", "ares_create_query"},
+                          {"ret", ret},
+                      }));
   if (ret != 0) {
     return -1;
   }
   if (buff == nullptr || bufsiz < 0 || static_cast<size_t>(bufsiz) > SIZE_MAX) {
     MKARES_ABORT();
   }
-  int64_t err = mkares_server_send_buffer(
-      server, buff, static_cast<size_t>(bufsiz));
+  int64_t err = mkares_channel_send_buffer(
+      channel, buff, static_cast<size_t>(bufsiz));
   ares_free_string(buff);
   return err;
 }
 
-void mkares_server_delete(mkares_server_t *server) {
-  if (server != nullptr && server->fd != -1) {
+void mkares_channel_delete(mkares_channel_t *channel) {
+  if (channel != nullptr && channel->fd != -1) {
 #ifdef _WIN32
-    closesocket(static_cast<SOCKET>(server->fd));
+    closesocket(static_cast<SOCKET>(channel->fd));
 #else
-    close(static_cast<int>(server->fd));
+    close(static_cast<int>(channel->fd));
 #endif
   }
-  delete server;  // gracefully handles nullptr
+  delete channel;  // gracefully handles nullptr
 }
 
 struct mkares_response {
@@ -327,7 +327,7 @@ struct mkares_response {
 };
 
 static bool mkares_response_parse_hostent(
-    const mkares_server_t *server, mkares_response_t *response, hostent *host) {
+    const mkares_channel_t *channel, mkares_response_t *response, hostent *host) {
   if (host->h_name != nullptr) {
     response->cname = host->h_name;
   }
@@ -349,10 +349,10 @@ static bool mkares_response_parse_hostent(
         break;
       default: MKARES_ABORT();
     }
-    MKARES_LOG(server, (nlohmann::json{
-                      {"func", "inet_ntop"},
-                      {"ret", s},
-                  }));
+    MKARES_LOG(channel, (nlohmann::json{
+                            {"func", "inet_ntop"},
+                            {"ret", s},
+                        }));
     if (s == nullptr) {
       return false;
     }
@@ -361,24 +361,24 @@ static bool mkares_response_parse_hostent(
   return true;
 }
 
-static void mkares_server_recvparse(const mkares_server_t *server,
-                                    const mkares_query_t *query,
-                                    mkares_response_uptr &response) {
-  if (server == nullptr || query == nullptr || response == nullptr) {
+static void mkares_channel_recvparse(const mkares_channel_t *channel,
+                                     const mkares_query_t *query,
+                                     mkares_response_uptr &response) {
+  if (channel == nullptr || query == nullptr || response == nullptr) {
     MKARES_ABORT();
   }
   char buff[2048];
 #ifdef _WIN32
-  int n = recv(static_cast<SOCKET>(server->fd), buff, sizeof(buff), 0);
+  int n = recv(static_cast<SOCKET>(channel->fd), buff, sizeof(buff), 0);
 #else
-  ssize_t n = recv(static_cast<int>(server->fd), buff, sizeof(buff), 0);
+  ssize_t n = recv(static_cast<int>(channel->fd), buff, sizeof(buff), 0);
 #endif
   MKARES_HOOK(recv, n);
-  MKARES_LOG(server, (nlohmann::json{
-                         {"func", "recv"},
-                         {"ret", n},
-                         {"data", mkares_maybe_base64(buff, n)},
-                     }));
+  MKARES_LOG(channel, (nlohmann::json{
+                          {"func", "recv"},
+                          {"ret", n},
+                          {"data", mkares_maybe_base64(buff, n)},
+                      }));
   if (n <= 0) {
     return;
   }
@@ -390,57 +390,57 @@ static void mkares_server_recvparse(const mkares_server_t *server,
           reinterpret_cast<unsigned char *>(buff),
           static_cast<int>(n), &host, nullptr, nullptr);
       MKARES_HOOK(ares_parse_a_reply, ret);
-      MKARES_LOG(server, (nlohmann::json{
-                             {"func", "ares_parse_a_reply"},
-                             {"ret", ret},
-                         }));
+      MKARES_LOG(channel, (nlohmann::json{
+                              {"func", "ares_parse_a_reply"},
+                              {"ret", ret},
+                          }));
       break;
     case ns_t_aaaa:
       ret = ares_parse_aaaa_reply(
           reinterpret_cast<unsigned char *>(buff),
           static_cast<int>(n), &host, nullptr, nullptr);
       MKARES_HOOK(ares_parse_aaaa_reply, ret);
-      MKARES_LOG(server, (nlohmann::json{
-                             {"func", "ares_parse_aaaa_reply"},
-                             {"ret", ret},
-                         }));
+      MKARES_LOG(channel, (nlohmann::json{
+                              {"func", "ares_parse_aaaa_reply"},
+                              {"ret", ret},
+                          }));
       break;
     default: MKARES_ABORT();  // should not happen
   }
   if (ret != ARES_SUCCESS) {
     return;
   }
-  bool ok = mkares_response_parse_hostent(server, response.get(), host);
+  bool ok = mkares_response_parse_hostent(channel, response.get(), host);
   ares_free_hostent(host);
   response->good = ok;
 }
 
-mkares_response_t *mkares_server_recv_nonnull(
-    const mkares_server_t *server, const mkares_query_t *query) {
-  if (server == nullptr || query == nullptr) {
+mkares_response_t *mkares_channel_recv_nonnull(
+    const mkares_channel_t *channel, const mkares_query_t *query) {
+  if (channel == nullptr || query == nullptr) {
     MKARES_ABORT();
   }
   mkares_response_uptr response{new mkares_response_t};
   pollfd pfd{};
   pfd.events = POLLIN;
-  int64_t t = server->timeout;
+  int64_t t = channel->timeout;
   t = (t < 0) ? -1 : (t < INT_MAX) ? t : INT_MAX;
 #ifdef _WIN32
-  pfd.fd = static_cast<SOCKET>(server->fd);
+  pfd.fd = static_cast<SOCKET>(channel->fd);
   int ret = WSAPoll(&pfd, 1, static_cast<int>(t));
 #else
-  pfd.fd = static_cast<int>(server->fd);
+  pfd.fd = static_cast<int>(channel->fd);
   int ret = poll(&pfd, 1, static_cast<int>(t));
 #endif
   MKARES_HOOK(poll, ret);
-  MKARES_LOG(server, (nlohmann::json{
-                         {"func", "poll"},
-                         {"ret", ret},
-                     }));
+  MKARES_LOG(channel, (nlohmann::json{
+                          {"func", "poll"},
+                          {"ret", ret},
+                      }));
   if (ret <= 0) {
     return response.release();
   }
-  mkares_server_recvparse(server, query, response);
+  mkares_channel_recvparse(channel, query, response);
   return response.release();
 }
 
