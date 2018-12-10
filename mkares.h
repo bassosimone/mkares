@@ -522,7 +522,8 @@ static void mkares_channel_recv(const mkares_channel_t *channel,
 }
 
 // mkares_channel_pollrecv polls @p channel waiting for the socket becoming
-// readable or a timeout. @p query is the query that has been sent and @p
+// readable or a timeout. If polling is successful, then the response is
+// read from the @p channel. @p query is the query that has been sent and @p
 // response is where to save the response. Aborts if passed any null pointer
 // argument, of if @p channel's socket is invalid.
 static void mkares_channel_pollrecv(const mkares_channel_t *channel,
