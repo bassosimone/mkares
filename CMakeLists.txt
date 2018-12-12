@@ -36,6 +36,8 @@ MkDownloadMeasurementKitMkData()
 if("${APPLE}")
   list(APPEND INCLUDES_ "/usr/local/Cellar/libressl/2.8.2/include")
   list(APPEND LIBS_ "/usr/local/Cellar/libressl/2.8.2/lib/libcrypto.dylib")
+else
+  list(APPEND LIBS_ "crypto")
 endif()
 
 # Compiler flags
