@@ -17,6 +17,8 @@
 ///
 /// 5. we can gather network errors
 ///
+/// 6. we can perform a parasitic traceroute
+///
 /// The name seems to imply that we're using github.com/c-ares/c-ares
 /// however any backend resolve that allows us to implement these
 /// functionalities is actually good.
@@ -56,6 +58,12 @@ void mkares_query_set_name(mkares_query_t *query, const char *name);
 /// mkares_query_set_type_AAAA queries for AAAA. Default is to query for
 /// A, which is the most common case. Aborts if the @p query is null.
 void mkares_query_set_type_AAAA(mkares_query_t *query);
+
+/// mkares_query_set_ttl allows to set the TTL. Values above 255 will
+/// be clamped down to 255. Negative values will disable setting a
+/// TTL (which is the default). Passing a null @p query causes this
+/// function to call abort.
+void mkares_query_set_ttl(mkares_query_t *query, int64_t ttl);
 
 /// mkares_query_set_timeout sets the query timeout.
 /// TODO(bassosimone): document
@@ -260,6 +268,9 @@ struct mkares_query {
   // timeout is the timeout in milliseconds.
   int64_t timeout = 3000;
 
+  // ttl to use for the query.
+  int64_t ttl = -1;
+
   // type is the type of the query.
   int type = ns_t_a;
 };
@@ -274,6 +285,11 @@ void mkares_query_set_name(mkares_query_t *query, const char *name) {
 void mkares_query_set_type_AAAA(mkares_query_t *query) {
   if (query == nullptr) MKARES_ABORT();
   query->type = ns_t_aaaa;
+}
+
+void mkares_query_set_ttl(mkares_query_t *query, int64_t ttl) {
+  if (query == nullptr) MKARES_ABORT();
+  query->ttl = ttl;
 }
 
 void mkares_query_set_timeout(mkares_query_t *query, int64_t timeout) {
@@ -422,6 +438,7 @@ static std::string mkares_generic_event_new(
   json["value"]["server_port"] = query->server_port;
   json["value"]["t"] = mkares_now();
   json["value"]["timeout"] = query->timeout;
+  json["value"]["ttl"] = query->ttl;
   return json.dump();
 }
 
@@ -593,6 +610,12 @@ static bool mkares_sendrecv_sock(
   int ret = connect(sock, aip->ai_addr, aip->ai_addrlen);
   MKARES_HOOK(connect, ret);
   if (ret != 0) return false;
+  if (query->ttl >= 0) {
+    int ttl = (query->ttl < 255) ? static_cast<int>(query->ttl) : 255;
+    ret = setsockopt(sock, IPPROTO_IP, IP_TTL,
+                     reinterpret_cast<char *>(&ttl), sizeof(ttl));
+    if (ret != 0) return false;
+  }
   bool good = mkares_send(query, response, sock);
   if (!good) return false;
   return mkares_recv(query, response, sock);
