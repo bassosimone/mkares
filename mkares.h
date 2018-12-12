@@ -4,10 +4,35 @@
 #ifndef MEASUREMENT_KIT_MKARES_H
 #define MEASUREMENT_KIT_MKARES_H
 
-/// @file mkares.h. Measurement Kit c-ares wrappers.
+/// @file mkares.h. Measurement Kit asynchronous resolver. This code
+/// implements the following OONI DNS requirements:
+///
+/// 1. we can issue A and AAAA queries
+///
+/// 2. we can specify a specific nameserver
+///
+/// 3. we can save the sent and received DNS messages
+///
+/// 4. we can save the timing of messages
+///
+/// 5. we can gather network errors
+///
+/// The name seems to imply that we're using github.com/c-ares/c-ares
+/// however any backend resolve that allows us to implement these
+/// functionalities is actually good.
+///
+/// This code does not meet the following requirements:
+///
+/// 1. possibility of sending queries over TCP
+///
+/// 2. possibility of sending queries different from A and AAAA
+///
+/// 3. possibility of noticing if we receive subsequent DNS responses
+///    after the first response has been received
+///
+/// 4. possibility of performing non stub resolutions
 
 #include <stdint.h>
-#include <stdio.h>
 #include <stdlib.h>
 
 #ifdef __cplusplus
@@ -16,6 +41,9 @@ extern "C" {
 
 /// mkares_query_t is a DNS query.
 typedef struct mkares_query mkares_query_t;
+
+/// mkares_response_t is the response to a DNS query.
+typedef struct mkares_response mkares_response_t;
 
 /// mkares_query_new_nonnull creates a DNS query. This function never
 /// returns null and will abort if memory allocations fail.
@@ -26,14 +54,30 @@ mkares_query_t *mkares_query_new_nonnull(void);
 void mkares_query_set_name(mkares_query_t *query, const char *name);
 
 /// mkares_query_set_type_AAAA queries for AAAA. Default is to query for
-/// A. Aborts if @p query is null.
+/// A, which is the most common case. Aborts if the @p query is null.
 void mkares_query_set_type_AAAA(mkares_query_t *query);
+
+/// mkares_query_set_timeout sets the query timeout.
+/// TODO(bassosimone): document
+void mkares_query_set_timeout(mkares_query_t *query, int64_t timeout);
+
+/// mkares_query_set_server_address sets the server address. The address must be
+/// a valid IPv4 or IPv6 address. This function aborts if passed null pointers.
+void mkares_query_set_server_address(
+    mkares_query_t *query, const char *address);
+
+/// mkares_query_set_server_address sets the server port. The port must be a
+/// valid port number. This function aborts if passed null pointers.
+void mkares_query_set_server_port(
+    mkares_query_t *query, const char *port);
+
+/// mkares_query_perform_nonnull performs @p query. It aborts if @p query is a
+/// null pointer. It always return a valid pointer, that you own. You must use
+/// mkares_response_good to check whether the query succeeded.
+mkares_response_t *mkares_query_perform_nonnull(const mkares_query_t *query);
 
 /// mkares_query_delete destroys @p query, which may be null.
 void mkares_query_delete(mkares_query_t *query);
-
-/// mkares_response_t is the response to a DNS query.
-typedef struct mkares_response mkares_response_t;
 
 /// mkares_response_good returns true if the response is successful (i.e.
 /// we have at least one IP address) and false otherwise. This function will
@@ -56,110 +100,25 @@ size_t mkares_response_get_addresses_size(const mkares_response_t *response);
 const char *mkares_response_get_address_at(
     const mkares_response_t *response, size_t idx);
 
-// TODO(bassosimone): the events should probably also include the query ID
-// because that would be useful to cross correlate with events occurred when
-// receiving additional most-likely spoofed responses.
-
-/// mkares_response_get_events_size is like mkares_response_get_addresses_size
-/// but for events rather than addresses. Events are a sequence of string
-/// serialised JSON objects that describe all the events occurring at the API
-/// level during the execution of the query. The general event is like:
+/// mkares_response_get_send_event returns the send event serialised as
+/// a JSON object. In case of failure, this function will return an empty
+/// JSON object, i.e., `"{}"`. The returned string is owned by the @p
+/// response object and have the same lifecycle. The returned event is
+/// like in the following example:
 ///
-/// ```json
-/// {"func":"inet_ntop","now":35200981, ...}
-/// ```
-///
-/// Where `func` is the API name, `now` is the number of milliseconds since
-/// the zero of the C++ steady clock, and additional fields may include, for
-/// example, the return value of an API, and the data that has been sent
-/// or received. Because DNS is a binary protocol, the data will be encoded
-/// as a base64 string. In case of API failure, the data will instead be
-/// represented as an empty string, if no data has been read.
-size_t mkares_response_get_events_size(const mkares_response_t *response);
+/// TODO(bassosimone): finish providing example.
+const char *mkares_response_get_send_event(const mkares_response_t *response);
 
-/// mkares_response_get_event_at is like mkares_response_get_address_at
-/// except that it returns events rather than addresses. The format of events
-/// is documented in mkares_response_get_events_size docs.
-const char *mkares_response_get_event_at(
-    const mkares_response_t *response, size_t idx);
+// TODO(bassosimone): document
+const char *mkares_response_get_recv_event(const mkares_response_t *response);
 
 /// mkares_response_delete destroys @p response, which may be null.
 void mkares_response_delete(mkares_response_t *response);
-
-/// mkares_channel_t is a socket for sending a DNS request.
-typedef struct mkares_channel mkares_channel_t;
-
-/// mkares_channel_new_nonnull creates a new channel. This function will always
-/// return a valid pointer and will abort if any malloc fails.
-mkares_channel_t *mkares_channel_new_nonnull(void);
-
-/// mkares_channel_set_address sets the server address. The address must be
-/// a valid IPv4 or IPv6 address. This function aborts if passed null pointers.
-void mkares_channel_set_address(mkares_channel_t *channel, const char *address);
-
-/// mkares_channel_set_address sets the server port. The port must be a valid
-/// port number. This function aborts if passed null pointers.
-void mkares_channel_set_port(mkares_channel_t *channel, const char *port);
-
-/// mkares_channel_sendrecv_nonnull sends @p query and receives a response
-/// using @p channel. This function will always return a valid pointer
-/// and will abort on memory allocation errors. It will also abort when
-/// passed null pointer arguments. To check whether the returned response
-/// succeeded, you mkares_reponse_good.
-mkares_response_t *mkares_channel_sendrecv_nonnull(
-    mkares_channel_t *channel, const mkares_query_t *query);
-
-/// mkares_channel_delete destroys @p channel, which may be null.
-void mkares_channel_delete(mkares_channel_t *channel);
-
-/// mkares_event_t is an asynchronous event occurring when a channel
-/// is being managed by the reaper (described below).
-typedef struct mkares_event mkares_event_t;
-
-/// mkares_event_str returns the string representation of the event. This
-/// is a serialised JSON as described above in the documentation of the
-/// mkares_response_get_events_size function. This function will abort if
-/// the @p event argument is a null pointer.
-const char *mkares_event_str(const mkares_event_t *event);
-
-/// mkares_event_delete destroys @p event, which may be null.
-void mkares_event_delete(mkares_event_t *event);
-
-/// mkares_reaper_t will manage channels where a response has already been
-/// received, to check whether subsequent responses are received. This
-/// operation will be done by polling several channels at once in a background
-/// thread. If subsequent responses are received they're saved in the reaper.
-typedef struct mkares_reaper mkares_reaper_t;
-
-/// mkares_reaper_new_nonnull creates a new reaper. This function will never
-/// fail and will always return a valid pointer. Aborts on malloc error.
-mkares_reaper_t *mkares_reaper_new_nonnull(void);
-
-/// mkares_reaper_movein_channel_and_query transfers the ownership of @p
-/// channel and @p query to @p reaper. You must not use either of them after
-/// this function has been called. This function will abort if passed any
-/// null pointer argument.
-void mkares_reaper_movein_channel_and_query(
-    mkares_reaper_t *reaper,
-    mkares_channel_t *channel, mkares_query_t *query);
-
-//TODO(bassosimone): specify the format of the returned events
-// that should be such that one can easily link with other data.
-
-/// mkares_reaper_get_next_event returns the next event registered by the
-/// reaper. This function may return a null pointer if no events have been
-/// saved in @p reaper. This function aborts if @p reaper is null.
-mkares_event_t *mkares_reaper_get_next_event(
-    mkares_reaper_t *reaper);
-
-/// mkares_repaer_delete destroys @p repear, which may be null.
-void mkares_reaper_delete(mkares_reaper_t *reaper);
 
 #ifdef __cplusplus
 }  // extern "C"
 
 #include <memory>
-#include <string>
 
 /// mkares_query_deleter is a deleter for mkares_query_t.
 struct mkares_query_deleter {
@@ -183,39 +142,6 @@ struct mkares_response_deleter {
 using mkares_response_uptr = std::unique_ptr<mkares_response_t,
                                              mkares_response_deleter>;
 
-/// mkares_channel_deleter is a deleter for mkares_channel_t.
-struct mkares_channel_deleter {
-  void operator()(mkares_channel_t *channel) {
-    mkares_channel_delete(channel);
-  }
-};
-
-/// mkares_channel_deleter is a unique pointer to mkares_channel_t.
-using mkares_channel_uptr = std::unique_ptr<mkares_channel_t,
-                                            mkares_channel_deleter>;
-
-/// mkares_event_deleter is a deleter for mkares_event_t.
-struct mkares_event_deleter {
-  void operator()(mkares_event_t *event) {
-    mkares_event_delete(event);
-  }
-};
-
-/// mkares_event_deleter is a unique pointer to mkares_event_t.
-using mkares_event_uptr = std::unique_ptr<mkares_event_t,
-                                          mkares_event_deleter>;
-
-/// mkares_repaer_deleter is a deleter for mkares_repaer_t.
-struct mkares_reaper_deleter {
-  void operator()(mkares_reaper_t *reaper) {
-    mkares_reaper_delete(reaper);
-  }
-};
-
-/// mkares_repaer_deleter is a unique pointer to mkares_repaer_t.
-using mkares_reaper_uptr = std::unique_ptr<mkares_reaper_t,
-                                           mkares_reaper_deleter>;
-
 // MKARES_INLINE_IMPL controls whether to inline the implementation.
 #ifdef MKARES_INLINE_IMPL
 
@@ -231,10 +157,9 @@ using mkares_reaper_uptr = std::unique_ptr<mkares_reaper_t,
 #include <unistd.h>
 #endif
 
-#include <deque>
+#include <iostream>
 #include <mutex>
 #include <set>
-#include <thread>
 #include <utility>
 #include <vector>
 
@@ -253,7 +178,8 @@ using mkares_reaper_uptr = std::unique_ptr<mkares_reaper_t,
 
 // MKARES_HOOK allows to override a return value in unit tests.
 #ifndef MKARES_HOOK
-#define MKARES_HOOK(T, V)  // Nothing
+//#define MKARES_HOOK(T, V)  // Nothing
+#define MKARES_HOOK(T, V) std::clog << #T << ": " << V << std::endl
 #endif
 
 // mkares_ids
@@ -311,19 +237,28 @@ static void mkares_ids_put(uint16_t id) {
   ids->ids.erase(id);
 }
 
-// mkares_query
-// ------------
+// mkares_query w/o perform
+// ------------------------
 
 // mkares_query is the private data bound to mkares_query_t.
 struct mkares_query {
-  // name is the name of the query.
-  std::string name;
-
   // dnsclass is the class of the query.
   int dnsclass = ns_c_in;
 
   // id is the ID of the query.
   uint16_t id = mkares_ids_get();
+
+  // name is the name to query for.
+  std::string name;
+
+  // server_address is the DNS server address.
+  std::string server_address = "8.8.8.8";
+
+  // server_port is the DNS server port.
+  std::string server_port = "53";
+
+  // timeout is the timeout in milliseconds.
+  int64_t timeout = 3000;
 
   // type is the type of the query.
   int type = ns_t_a;
@@ -332,17 +267,30 @@ struct mkares_query {
 mkares_query_t *mkares_query_new_nonnull() { return new mkares_query_t; }
 
 void mkares_query_set_name(mkares_query_t *query, const char *name) {
-  if (query == nullptr || name == nullptr) {
-    MKARES_ABORT();
-  }
+  if (query == nullptr || name == nullptr) MKARES_ABORT();
   query->name = name;
 }
 
 void mkares_query_set_type_AAAA(mkares_query_t *query) {
-  if (query == nullptr) {
-    MKARES_ABORT();
-  }
+  if (query == nullptr) MKARES_ABORT();
   query->type = ns_t_aaaa;
+}
+
+void mkares_query_set_timeout(mkares_query_t *query, int64_t timeout) {
+  if (query == nullptr) MKARES_ABORT();
+  query->timeout = timeout;
+}
+
+void mkares_query_set_server_address(
+    mkares_query_t *query, const char *address) {
+  if (query == nullptr || address == nullptr) MKARES_ABORT();
+  query->server_address = address;
+}
+
+void mkares_query_set_server_port(
+    mkares_query_t *query, const char *port) {
+  if (query == nullptr || port == nullptr) MKARES_ABORT();
+  query->server_port = port;
 }
 
 void mkares_query_delete(mkares_query_t *query) {
@@ -368,178 +316,88 @@ struct mkares_response {
 
   // good indicates whether the query succeeded.
   int64_t good = false;
+
+  // recv_event is the receive event.
+  std::string recv_event;
+
+  // send_event is the send event.
+  std::string send_event;
 };
 
 int64_t mkares_response_good(const mkares_response_t *response) {
-  if (response == nullptr) {
-    MKARES_ABORT();
-  }
+  if (response == nullptr) MKARES_ABORT();
   return response->good;
 }
 
 const char *mkares_response_get_cname(const mkares_response_t *response) {
-  if (response == nullptr) {
-    MKARES_ABORT();
-  }
+  if (response == nullptr) MKARES_ABORT();
   return response->cname.c_str();
 }
 
 size_t mkares_response_get_addresses_size(const mkares_response_t *response) {
-  if (response == nullptr) {
-    MKARES_ABORT();
-  }
+  if (response == nullptr) MKARES_ABORT();
   return response->addresses.size();
 }
 
 const char *mkares_response_get_address_at(
     const mkares_response_t *response, size_t idx) {
-  if (response == nullptr || idx >= response->addresses.size()) {
-    MKARES_ABORT();
-  }
+  if (response == nullptr || idx >= response->addresses.size()) MKARES_ABORT();
   return response->addresses[idx].c_str();
 }
 
-size_t mkares_response_get_events_size(const mkares_response_t *response) {
-  if (response == nullptr) {
-    MKARES_ABORT();
-  }
-  return response->events.size();
+const char *mkares_response_get_send_event(const mkares_response_t *response) {
+  if (response == nullptr) MKARES_ABORT();
+  return response->send_event.c_str();
 }
 
-const char *mkares_response_get_event_at(
-    const mkares_response_t *response, size_t idx) {
-  if (response == nullptr || idx >= response->events.size()) {
-    MKARES_ABORT();
-  }
-  return response->events[idx].c_str();
+const char *mkares_response_get_recv_event(const mkares_response_t *response) {
+  if (response == nullptr) MKARES_ABORT();
+  return response->recv_event.c_str();
 }
 
-void mkares_response_delete(mkares_response_t *response) {
-  delete response;
-}
+void mkares_response_delete(mkares_response_t *response) { delete response; }
 
-// mkares_channel
-// --------------
+// mkares_query_perform
+// --------------------
 
-// mkares_channels is the private data of mkares_channel_t.
-struct mkares_channel {
-  // address is the address of the server.
-  std::string address;
+// mkares_socket_t is a system socket.
+#ifdef _WIN32
+using mkares_socket_t = SOCKET;
+#else
+using mkares_socket_t = int;
+#endif
 
-  // port is the port of the server.
-  std::string port = "53";
+// mkares_socket_invalid is the value indicating an invalid socket.
+#ifdef _WIN32
+constexpr mkares_socket_t mkares_socket_invalid = INVALID_SOCKET;
+#else
+constexpr mkares_socket_t mkares_socket_invalid = -1;
+#endif
 
-  // timeout is the query timeout in millisecond.
-  int64_t timeout = 3000;
-
-  // fd is the socket.
-  int64_t fd = -1;
-};
-
-mkares_channel_t *mkares_channel_new_nonnull() { return new mkares_channel; }
-
-void mkares_channel_set_address(mkares_channel_t *channel, const char *address) {
-  if (channel == nullptr || address == nullptr) {
-    MKARES_ABORT();
-  }
-  channel->address = address;
-}
-
-void mkares_channel_set_port(mkares_channel_t *channel, const char *port) {
-  if (channel == nullptr || port == nullptr) {
-    MKARES_ABORT();
-  }
-  channel->port = port;
-}
-
+// mkares_now returns the monitonic clock's "now" in milliseconds.
 static int64_t mkares_now() {
   auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
       std::chrono::steady_clock::now().time_since_epoch());
   return now.count();
 }
 
-// MKARES_EVADD adds @p Event to @p Response events.
-#define MKARES_EVADD(Response, Event)      \
-  do {                                     \
-    nlohmann::json ev = Event;             \
-    ev["now"] = mkares_now();              \
-    Response->events.push_back(ev.dump()); \
-  } while (0)
+// MKARES_CLOSESOCKET closes a socket
+#ifdef _WIN32
+#define MKARES_CLOSESOCKET closesocket
+#else
+#define MKARES_CLOSESOCKET close
+#endif
 
-// mkares_channel_connect_addrinfo connects @p channel to the socket
-// identifier by @p aip and adds events to @p response's events. Will
-// abort if passed any null pointer or if @p channel's socket is not
-// invalid (meaning that we're already connected). Returns a bool value
-// indicating whether it succeeded or not.
-static bool
-mkares_channel_connect_addrinfo(mkares_channel_t *channel, addrinfo *aip,
-                                mkares_response_uptr &response) {
-  if (channel == nullptr || aip == nullptr || response == nullptr) {
-    MKARES_ABORT();
-  }
-  if (channel->fd != -1) MKARES_ABORT();
-  channel->fd = static_cast<int64_t>(socket(aip->ai_family, SOCK_DGRAM, 0));
-  MKARES_HOOK(socket, channel->fd);
-  MKARES_EVADD(response, (nlohmann::json{
-                             {"func", "socket"},
-                             {"ret", channel->fd},
-                         }));
-  if (channel->fd == -1) return false;
-  int ret = connect(
-#ifdef _WIN32
-      static_cast<SOCKET>(channel->fd),
-#else
-      static_cast<int>(channel->fd),
-#endif
-      aip->ai_addr, aip->ai_addrlen);
-  MKARES_HOOK(connect, ret);
-  MKARES_EVADD(response, (nlohmann::json{
-                             {"func", "connect"},
-                             {"ret", ret},
-                         }));
-  if (ret != 0) {
-#ifdef _WIN32
-    (void)closesocket(static_cast<SOCKET>(channel->fd));
-#else
-    (void)close(static_cast<int>(channel->fd));
-#endif
-    channel->fd = -1;
-    return false;
-  }
-  return true;
+// mkares_errno_string returns an empty string if count is positive and
+// the error that occurred (normalised using C++11 naming) otherwise.
+template <typename SizeType>
+std::string mkares_errno_string(SizeType count) {
+  if (count >= 0) return "";
+  return "io_error";
 }
 
-// mkares_channel_connect connects @p channel to the endpoint stored inside
-// @p channel and logs events to @p response. Will abort if passed any
-// null pointer or if @p channel is already bound to a valid socket. Returns
-// whether it succeded or not.
-static bool mkares_channel_connect(
-    mkares_channel_t *channel, mkares_response_uptr &response) {
-  if (channel == nullptr || channel->fd != -1 || response == nullptr) {
-    MKARES_ABORT();
-  }
-  addrinfo hints{};
-  hints.ai_flags |= AI_NUMERICHOST | AI_NUMERICSERV;
-  hints.ai_socktype = SOCK_DGRAM;
-  addrinfo *rp = nullptr;
-  int ret = getaddrinfo(channel->address.c_str(),
-                        channel->port.c_str(), &hints, &rp);
-  MKARES_HOOK(getaddrinfo, ret);
-  MKARES_EVADD(response, (nlohmann::json{
-                             {"func", "getaddrinfo"},
-                             {"ret", ret},
-                         }));
-  if (ret != 0) return false;
-  if (rp == nullptr || rp->ai_next != nullptr) MKARES_ABORT();
-  bool ok = mkares_channel_connect_addrinfo(channel, rp, response);
-  freeaddrinfo(rp);
-  return ok;
-}
-
-// mkares_maybe_base64 returns a base64 encoded string if @p count is
-// positive. Otherwise, if @p count is negative (i.e. recv or send failed)
-// or too large (should not happen), it returns an empty string. It will
-// instead abort if it's pased a null pointer @p buff.
+// mkares_maybe_base64 returns buff as a base64 string if count is
+// positive, and returns an empty string otherwise.
 template <typename BufferType, typename SizeType>
 std::string mkares_maybe_base64(const BufferType buff, SizeType count) {
   if (buff == nullptr) MKARES_ABORT();
@@ -551,76 +409,9 @@ std::string mkares_maybe_base64(const BufferType buff, SizeType count) {
   return mkdata_moveout_base64(data);
 }
 
-// mkares_channel_send_buffer sends @p count bytes buffer starting at
-// @p base over @p channel and logs events in @p response. This function will
-// abort if passed any null pointer, if @p count is not positive, or if
-// @p channel is already connected. Returns a boolean valud indicating whether
-// it succeded or not. Note that not being able to send a full packet with
-// @p count bytes is considered a failure.
-static bool mkares_channel_send_buffer(
-    mkares_channel_t *channel, const uint8_t *base, size_t count,
-    mkares_response_uptr &response) {
-  if (channel == nullptr || base == nullptr || count <= 0 ||
-      response == nullptr) {
-    MKARES_ABORT();
-  }
-  if (channel->fd != -1) MKARES_ABORT();
-  if (!mkares_channel_connect(channel, response)) return false;
-#ifdef _WIN32
-  if (count > INT_MAX) MKARES_ABORT();
-  int n = send(static_cast<SOCKET>(channel->fd),
-               reinterpret_cast<const char *>(base),
-               static_cast<int>(count), 0);
-#else
-  ssize_t n = send(static_cast<int>(channel->fd), base, count, 0);
-#endif
-  MKARES_HOOK(send, n);
-  MKARES_EVADD(response, (nlohmann::json{
-                             {"func", "send"},
-                             {"ret", n},
-                             {"data", mkares_maybe_base64(base, count)},
-                         }));
-  if (n < 0 || static_cast<size_t>(n) != count) return false;
-  return true;
-}
-
-// mkares_channel_send sends @p query over @p channel logging events
-// in @p response. Aborts if passed null pointers, or if @p channel
-// socket's is already connected. Returns a bool value indicating whether
-// it succeeded or not.
-static bool
-mkares_channel_send(mkares_channel_t *channel, const mkares_query_t *query,
-                    mkares_response_uptr &response) {
-  if (channel == nullptr || query == nullptr || response == nullptr) {
-    MKARES_ABORT();
-  }
-  if (channel->fd != -1) MKARES_ABORT();
-  uint8_t *buff = nullptr;
-  int bufsiz = 0;
-  int ret = ares_create_query(query->name.c_str(), query->dnsclass, query->type,
-                              query->id, 1, &buff, &bufsiz, 0);
-  MKARES_HOOK(ares_create_query, ret);
-  MKARES_EVADD(response, (nlohmann::json{
-                             {"func", "ares_create_query"},
-                             {"ret", ret},
-                         }));
-  if (ret != 0) return false;
-  if (buff == nullptr || bufsiz < 0 || static_cast<size_t>(bufsiz) > SIZE_MAX) {
-    MKARES_ABORT();
-  }
-  bool good = mkares_channel_send_buffer(
-      channel, buff, static_cast<size_t>(bufsiz), response);
-  ares_free_string(buff);
-  return good;
-}
-
-// mkares_response_parse_hostent parses @p host into @p response. Aborts
-// if passed null pointers. Returns whether it succeeded or not.
-static bool
-mkares_response_parse_hostent(mkares_response_uptr &response, hostent *host) {
-  if (response == nullptr || host == nullptr) {
-    MKARES_ABORT();
-  }
+// mkares_parse_hostent parses @p host into @p response.
+static bool mkares_parse_hostent(mkares_response_t *response, hostent *host) {
+  if (response == nullptr || host == nullptr) MKARES_ABORT();
   if (host->h_name != nullptr) response->cname = host->h_name;
   for (char **addr = host->h_addr_list; (addr && *addr); ++addr) {
     char name[46];  // see https://stackoverflow.com/questions/1076714
@@ -636,289 +427,183 @@ mkares_response_parse_hostent(mkares_response_uptr &response, hostent *host) {
         break;
       default: MKARES_ABORT();  // should not happen
     }
-    MKARES_EVADD(response, (nlohmann::json{
-                               {"func", "inet_ntop"},
-                               {"ret", s},
-                           }));
     if (s == nullptr) return false;  // unlikely but better not to abort here
     response->addresses.push_back(s);
   }
   return true;
 }
 
-// mkares_channel_recv receives a @p response for @p query from @p channel. It
-// aborts if passed null pointers or if @p channel's socket is invalid.
-static void mkares_channel_recv(const mkares_channel_t *channel,
-                                const mkares_query_t *query,
-                                mkares_response_uptr &response) {
-  if (channel == nullptr || query == nullptr || response == nullptr) {
+// mkares_parse parses the response.
+static bool mkares_parse(
+    const mkares_query_t *query, mkares_response_t *response,
+    const uint8_t *data, size_t count) {
+  if (query == nullptr || response == nullptr || data == nullptr ||
+      count <= 0 || count > INT_MAX) {
     MKARES_ABORT();
   }
-  if (channel->fd == -1) MKARES_ABORT();
-  char buff[2048];  // small enough to stay on the stack
-#ifdef _WIN32
-  int n = recv(static_cast<SOCKET>(channel->fd), buff, sizeof(buff), 0);
-#else
-  ssize_t n = recv(static_cast<int>(channel->fd), buff, sizeof(buff), 0);
-#endif
-  MKARES_HOOK(recv, n);
-  MKARES_EVADD(response, (nlohmann::json{
-                             {"func", "recv"},
-                             {"ret", n},
-                             {"data", mkares_maybe_base64(buff, n)},
-                         }));
-  if (n <= 0) return;
-  if (static_cast<size_t>(n) > sizeof(buff)) MKARES_ABORT();
-  static_assert(sizeof(buff) <= INT_MAX, "Buffer size MAY cause overflow");
   hostent *host = nullptr;
   int ret = 0;
   switch (query->type) {
     case ns_t_a:
       ret = ares_parse_a_reply(
-          reinterpret_cast<unsigned char *>(buff),
-          static_cast<int>(n), &host, nullptr, nullptr);
+          data, static_cast<int>(count), &host, nullptr, nullptr);
       MKARES_HOOK(ares_parse_a_reply, ret);
-      MKARES_EVADD(response, (nlohmann::json{
-                                 {"func", "ares_parse_a_reply"},
-                                 {"ret", ret},
-                             }));
       break;
     case ns_t_aaaa:
       ret = ares_parse_aaaa_reply(
-          reinterpret_cast<unsigned char *>(buff),
-          static_cast<int>(n), &host, nullptr, nullptr);
+          data, static_cast<int>(count), &host, nullptr, nullptr);
       MKARES_HOOK(ares_parse_aaaa_reply, ret);
-      MKARES_EVADD(response, (nlohmann::json{
-                                 {"func", "ares_parse_aaaa_reply"},
-                                 {"ret", ret},
-                             }));
       break;
     default: MKARES_ABORT();  // should not happen
   }
-  if (ret != ARES_SUCCESS) return;
-  response->good = mkares_response_parse_hostent(response, host);
+  if (ret != ARES_SUCCESS) return false;
+  bool good = mkares_parse_hostent(response, host);
   ares_free_hostent(host);
+  return good;
 }
 
-// mkares_channel_pollrecv polls @p channel waiting for the socket becoming
-// readable or a timeout. If polling is successful, then the response is
-// read from the @p channel. @p query is the query that has been sent and @p
-// response is where to save the response. Aborts if passed any null pointer
-// argument, of if @p channel's socket is invalid.
-static void mkares_channel_pollrecv(const mkares_channel_t *channel,
-                                    const mkares_query_t *query,
-                                    mkares_response_uptr &response) {
-  if (channel == nullptr || query == nullptr || response == nullptr) {
+// mkares_recv receives the query using @p sock.
+static bool mkares_recv(
+    const mkares_query_t *query, mkares_response_t *response,
+    mkares_socket_t sock) {
+  if (query == nullptr || response == nullptr ||
+      sock == mkares_socket_invalid) {
     MKARES_ABORT();
   }
-  if (channel->fd == -1) MKARES_ABORT();
   pollfd pfd{};
   pfd.events = POLLIN;
-  int64_t t = channel->timeout;
+  pfd.fd = sock;
+  int64_t t = query->timeout;
   t = (t < 0) ? -1 : (t < INT_MAX) ? t : INT_MAX;
 #ifdef _WIN32
-  pfd.fd = static_cast<SOCKET>(channel->fd);
   int ret = WSAPoll(&pfd, 1, static_cast<int>(t));
 #else
-  pfd.fd = static_cast<int>(channel->fd);
   int ret = poll(&pfd, 1, static_cast<int>(t));
 #endif
   MKARES_HOOK(poll, ret);
-  MKARES_EVADD(response, (nlohmann::json{
-                             {"func", "poll"},
-                             {"ret", ret},
-                         }));
-  if (ret > 0) {
-    mkares_channel_recv(channel, query, response);
+  if (ret <= 0) return false;
+  std::array<char, 2048> buff;
+  auto n = recv(sock, buff.data(), buff.max_size(), 0);
+  MKARES_HOOK(recv, n);
+  {
+    nlohmann::json json;
+    json["key"] = "mkares.recv";
+    json["value"]["data"] = mkares_maybe_base64(buff.data(), n);
+    json["value"]["errno"] = mkares_errno_string(n);
+    json["value"]["ret"] = n;
+    json["value"]["t"] = mkares_now();
+    response->recv_event = json.dump();
   }
+  if (n <= 0) return false;
+  return mkares_parse(query, response, reinterpret_cast<uint8_t *>(buff.data()),
+                      static_cast<size_t>(n));
 }
 
-mkares_response_t *mkares_channel_sendrecv_nonnull(
-    mkares_channel_t *channel, const mkares_query_t *query) {
-  if (channel == nullptr || query == nullptr) MKARES_ABORT();
-  mkares_response_uptr response{new mkares_response_t};
-  if (!mkares_channel_send(channel, query, response)) return response.release();
-  mkares_channel_pollrecv(channel, query, response);
-  return response.release();
-}
-
-void mkares_channel_delete(mkares_channel_t *channel) {
-  if (channel != nullptr && channel->fd != -1) {
-#ifdef _WIN32
-    closesocket(static_cast<SOCKET>(channel->fd));
-#else
-    close(static_cast<int>(channel->fd));
-#endif
-  }
-  delete channel;  // gracefully handles nullptr
-}
-
-// mkares_event
-// ------------
-
-// mkares_event is the private data of mkares_event_t.
-struct mkares_event {
-  // s is the serialised event.
-  std::string s;
-};
-
-const char *mkares_event_str(const mkares_event_t *event) {
-  if (event == nullptr) MKARES_ABORT();
-  return event->s.c_str();
-}
-
-void mkares_event_delete(mkares_event_t *event) { delete event; }
-
-// mkares_reaper
-// --------------------
-
-// mkares_dead_context is the context of a dying channel and query.
-struct mkares_dead_context {
-  // since saves the number of milliseconds when we started monitoring
-  // this channel and query for subsequent responses.
-  int64_t since = 0;
-
-  // channel is the channel previously used for sending a query and that
-  // already received a response for such query.
-  mkares_channel_uptr channel;
-
-  // query is the query that was sent.
-  mkares_query_uptr query;
-};
-
-// mkares_dead_context_uptr is a unique pointer to mkares_dead_context.
-using mkares_dead_context_uptr = std::unique_ptr<mkares_dead_context>;
-
-// mkares_reaper is the private data of mkares_reaper_t.
-struct mkares_reaper {
-  // context is the list of contexts we're monitoring.
-  std::deque<mkares_dead_context_uptr> contexts;
-
-  // events contains the events occurred when receiving subsequent
-  // responses after we've already received a response.
-  std::deque<mkares_event_uptr> events;
-
-  // mutex protects data structure against concurrent access.
-  std::mutex mutex;
-
-  // stop is a flag used to stop the worker thread.
-  std::atomic_bool stop{false};
-
-  // thread is a worker thread that checks for subsequent responses.
-  std::thread thread;
-};
-
-// mkares_reaper_loop loops over @p reaper's contexts until the @p reaper
-// is ordered to stop. For each context, it waits until either its channel
-// socket becomes readable or there is a timeout. When it's readable, it
-// reads and saves the response. After reading a response, or in case there
-// is a timeout, the context is then discarded.
-static void mkares_reaper_loop(mkares_reaper_t *reaper) {
-  if (reaper == nullptr) MKARES_ABORT();
-  while (!reaper->stop) {
-    std::deque<mkares_dead_context_uptr> contexts;
-    {
-      std::unique_lock<std::mutex> _{reaper->mutex};
-      while (!reaper->contexts.empty()) {
-        mkares_dead_context_uptr context;
-        std::swap(context, reaper->contexts.front());
-        reaper->contexts.pop_front();
-        if (context->channel->fd == -1) continue;  // safety net
-        contexts.push_back(std::move(context));
-      }
-    }
-    std::vector<pollfd> pfds;
-    for (mkares_dead_context_uptr &context : contexts) {
-      pollfd pfd{};
-      pfd.events = POLLIN;
-#ifdef _WIN32
-      pfd.fd = static_cast<SOCKET>(context->channel->fd);
-#else
-      pfd.fd = static_cast<int>(context->channel->fd);
-#endif
-    }
-    constexpr int timeout = 250;
-    // TODO(bassosimone): make sure we don't overflow the size
-    // TODO(bassosimone): on Windows specifically, we should sleep
-    // if there is no available file descriptor.
-#ifdef _WIN32
-    int ret = WSAPoll(pfds.data(), pfds.size(), timeout);
-#else
-    int ret = poll(pfds.data(), pfds.size(), timeout);
-#endif
-    // TODO(bassosimone): specifically handle all poll errors
-    if (ret < 0) continue;
-    std::set<int64_t> readable_or_error;
-    for (const pollfd &pfd : pfds) {
-      if (pfd.revents != 0) readable_or_error.insert(pfd.fd);
-    }
-    while (!contexts.empty()) {
-      mkares_dead_context_uptr context;
-      std::swap(context, contexts.front());
-      contexts.pop_front();
-      if (readable_or_error.count(context->channel->fd) <= 0 &&
-          (context->channel->timeout < 0 ||
-           mkares_now() - context->since > context->channel->timeout)) {
-        reaper->contexts.push_back(std::move(context));
-        continue;  // try again
-      }
-      if (readable_or_error.count(context->channel->fd) <= 0) {
-        continue;  // timed out (good!)
-      }
-      // If we arrive here, the channel is readable (or there has been an
-      // error). So, re-execute the recv path and store the results.
-      mkares_response_uptr response{new mkares_response_t};
-      mkares_channel_recv(
-          context->channel.get(), context->query.get(), response);
-      for (std::string &s : response->events) {
-        mkares_event_uptr event{new mkares_event_t};
-        std::swap(s, event->s);
-        std::unique_lock<std::mutex> _{reaper->mutex};
-        reaper->events.push_back(std::move(event));
-      }
-    }
-  }
-}
-
-mkares_reaper_t *mkares_reaper_new_nonnull() {
-  mkares_reaper_uptr reaper{new mkares_reaper_t};
-  reaper->thread = std::thread{
-      mkares_reaper_loop,
-      reaper.get()};
-  return reaper.release();
-}
-
-void mkares_reaper_movein_channel_and_query(
-    mkares_reaper_t *reaper, mkares_channel_t *channel,
-    mkares_query_t *query) {
-  if (reaper == nullptr || channel == nullptr || query == nullptr) {
+// mkares_sendbuf sends the specified buffer using @p sock.
+static bool mkares_sendbuf(
+    mkares_response_t *response, mkares_socket_t sock,
+    const uint8_t *base, size_t count) {
+  if (response == nullptr || sock == mkares_socket_invalid ||
+      base == nullptr || count <= 0) {
     MKARES_ABORT();
   }
-  std::unique_lock<std::mutex> _{reaper->mutex};
-  mkares_dead_context_uptr dead_context{new mkares_dead_context};
-  dead_context->since = mkares_now();
-  dead_context->channel.reset(channel);
-  dead_context->query.reset(query);
-  reaper->contexts.push_back(std::move(dead_context));
+#ifdef _WIN32
+  if (count > INT_MAX) MKARES_ABORT();
+  int n = send(sock, reinterpret_cast<const char *>(base),
+               static_cast<int>(count), 0);
+#else
+  ssize_t n = send(sock, base, count, 0);
+#endif
+  MKARES_HOOK(send, n);
+  {
+    nlohmann::json json;
+    json["key"] = "mkares.send";
+    json["value"]["data"] = mkares_maybe_base64(base, count);
+    json["value"]["errno"] = mkares_errno_string(n);
+    json["value"]["ret"] = n;
+    json["value"]["t"] = mkares_now();
+    response->send_event = json.dump();
+  }
+  return n > 0 && static_cast<size_t>(n) == count;
 }
 
-mkares_event_t *mkares_reaper_get_next_event(mkares_reaper_t *reaper) {
-  if (reaper == nullptr) MKARES_ABORT();
-  mkares_event_uptr event;
-  std::unique_lock<std::mutex> _{reaper->mutex};
-  if (!reaper->events.empty()) {
-    std::swap(event, reaper->events.front());
-    reaper->events.pop_front();
+// mkares_send sends the query using @p sock.
+static bool mkares_send(
+    const mkares_query_t *query, mkares_response_t *response,
+    mkares_socket_t sock) {
+  if (query == nullptr || response == nullptr ||
+      sock == mkares_socket_invalid) {
+    MKARES_ABORT();
   }
-  return event.release();
+  uint8_t *buff = nullptr;
+  int bufsiz = 0;
+  int ret = ares_create_query(query->name.c_str(), query->dnsclass, query->type,
+                              query->id, 1, &buff, &bufsiz, 0);
+  MKARES_HOOK(ares_create_query, ret);
+  if (ret != 0) return false;
+  if (buff == nullptr || bufsiz < 0 || static_cast<size_t>(bufsiz) > SIZE_MAX) {
+    MKARES_ABORT();
+  }
+  bool good = mkares_sendbuf(response, sock, buff, static_cast<size_t>(bufsiz));
+  ares_free_string(buff);
+  return good;
 }
 
-void mkares_reaper_delete(mkares_reaper_t *reaper) {
-  if (reaper != nullptr) {
-    reaper->stop = true;
-    reaper->thread.join();
-    delete reaper;
+// mkares_sendrecv_ainfo sends the query and receives a response using
+// the specified @p sock for sending and receiving.
+static bool mkares_sendrecv_sock(
+    const mkares_query_t *query, mkares_response_t *response,
+    addrinfo *aip, mkares_socket_t sock) {
+  if (query == nullptr || response == nullptr || aip == nullptr ||
+      sock == mkares_socket_invalid) {
+    MKARES_ABORT();
   }
+  int ret = connect(sock, aip->ai_addr, aip->ai_addrlen);
+  MKARES_HOOK(connect, ret);
+  if (ret != 0) return false;
+  bool good = mkares_send(query, response, sock);
+  if (!good) return false;
+  return mkares_recv(query, response, sock);
+}
+
+// mkares_sendrecv_ainfo sends the query and receives a response using
+// @p aip to create and connect a datagram socket.
+static bool mkares_sendrecv_ainfo(
+    const mkares_query_t *query, mkares_response_t *response, addrinfo *aip) {
+  if (query == nullptr || response == nullptr || aip == nullptr) MKARES_ABORT();
+  mkares_socket_t sock = socket(aip->ai_family, SOCK_DGRAM, 0);
+  MKARES_HOOK(socket, sock);
+  if (sock == mkares_socket_invalid) return false;
+  bool good = mkares_sendrecv_sock(query, response, aip, sock);
+  MKARES_CLOSESOCKET(sock);
+  return good;
+}
+
+// mkares_sendrecv sends the query and receives the response.
+static bool mkares_sendrecv(
+    const mkares_query_t *query, mkares_response_t *response) {
+  if (query == nullptr || response == nullptr) MKARES_ABORT();
+  addrinfo hints{};
+  hints.ai_flags |= AI_NUMERICHOST | AI_NUMERICSERV;
+  hints.ai_socktype = SOCK_DGRAM;
+  addrinfo *rp = nullptr;
+  int ret = getaddrinfo(query->server_address.c_str(),
+                        query->server_port.c_str(), &hints, &rp);
+  MKARES_HOOK(getaddrinfo, ret);
+  // TODO(bassosimone): we probably want to notify the user in this case.
+  if (ret != 0) return false;
+  if (rp == nullptr || rp->ai_next != nullptr) MKARES_ABORT();
+  bool good = mkares_sendrecv_ainfo(query, response, rp);
+  freeaddrinfo(rp);
+  return good;
+}
+
+mkares_response_t *mkares_query_perform_nonnull(const mkares_query_t *query) {
+  if (query == nullptr) MKARES_ABORT();
+  mkares_response_uptr response{new mkares_response_t};
+  if (!mkares_sendrecv(query, response.get())) return response.release();
+  response->good = true;
+  return response.release();
 }
 
 #endif  // MKARES_INLINE_IMPL
