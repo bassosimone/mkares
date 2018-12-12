@@ -20,7 +20,7 @@
 /// 6. we can perform a parasitic traceroute
 ///
 /// The name seems to imply that we're using github.com/c-ares/c-ares
-/// however any backend resolve that allows us to implement these
+/// however any backend resolver library that allows us to implement these
 /// functionalities is actually good.
 ///
 /// This code does not meet the following requirements:
