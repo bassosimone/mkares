@@ -388,18 +388,17 @@ static int64_t mkares_now() {
 #define MKARES_CLOSESOCKET close
 #endif
 
-// mkares_errno_string returns an empty string if count is positive and
-// the error that occurred (normalised using C++11 naming) otherwise.
-template <typename SizeType>
-std::string mkares_errno_string(SizeType count) {
-  if (count >= 0) return "";
+// mkares_maybe_errno returns the error that occurred if retval is
+// negative and `"no_error"` otherwise.
+static std::string mkares_maybe_errno(int64_t retval) {
+  if (retval >= 0) return "no_error";
+  // TODO(bassosimone): map interesting system errors.
   return "io_error";
 }
 
 // mkares_maybe_base64 returns buff as a base64 string if count is
 // positive, and returns an empty string otherwise.
-template <typename BufferType, typename SizeType>
-std::string mkares_maybe_base64(const BufferType buff, SizeType count) {
+static std::string mkares_maybe_base64(const void *buff, int64_t count) {
   if (buff == nullptr) MKARES_ABORT();
   if (count <= 0) return "";
   if (static_cast<uint64_t>(count) > SIZE_MAX) MKARES_ABORT();
@@ -407,6 +406,39 @@ std::string mkares_maybe_base64(const BufferType buff, SizeType count) {
   mkdata_movein_data(data, std::string{reinterpret_cast<const char *>(buff),
                                        static_cast<size_t>(count)});
   return mkdata_moveout_base64(data);
+}
+
+// mkares_generic_event_new creates a new generic event.
+static std::string mkares_generic_event_new(
+    std::string event_key, std::string event_data,
+    std::string event_errno, int64_t retval) {
+  nlohmann::json json;
+  json["key"] = event_key;
+  json["value"]["data"] = event_data;
+  json["value"]["error"] = event_errno;
+  json["value"]["ret"] = retval;
+  json["value"]["t"] = mkares_now();
+  return json.dump();
+}
+
+// mkares_recv_event_new creates a new recv event.
+static std::string mkares_recv_event_new(const void *data, int64_t retval) {
+  if (data == nullptr) MKARES_ABORT();
+  return mkares_generic_event_new(
+      "mkares.recv",
+      mkares_maybe_base64(data, retval),
+      mkares_maybe_errno(retval),
+      retval);
+}
+
+// mkares_send_event_new creates a new send event.
+static std::string mkares_send_event_new(
+    const void *data, size_t count, int64_t retval) {
+  return mkares_generic_event_new(
+      "mkares.send",
+      mkares_maybe_base64(data, count),
+      mkares_maybe_errno(retval),
+      retval);
 }
 
 // mkares_parse_hostent parses @p host into @p response.
@@ -481,19 +513,19 @@ static bool mkares_recv(
   int ret = poll(&pfd, 1, static_cast<int>(t));
 #endif
   MKARES_HOOK(poll, ret);
-  if (ret <= 0) return false;
+  if (ret < 0) {
+    response->recv_event = mkares_recv_event_new("", -1);
+    return false;
+  }
+  if (ret == 0) {
+    response->recv_event = mkares_generic_event_new(
+        "mkares.recv", "", "timed_out", -1);
+    return false;
+  }
   std::array<char, 2048> buff;
   auto n = recv(sock, buff.data(), buff.max_size(), 0);
   MKARES_HOOK(recv, n);
-  {
-    nlohmann::json json;
-    json["key"] = "mkares.recv";
-    json["value"]["data"] = mkares_maybe_base64(buff.data(), n);
-    json["value"]["errno"] = mkares_errno_string(n);
-    json["value"]["ret"] = n;
-    json["value"]["t"] = mkares_now();
-    response->recv_event = json.dump();
-  }
+  response->recv_event = mkares_recv_event_new(buff.data(), n);
   if (n <= 0) return false;
   return mkares_parse(query, response, reinterpret_cast<uint8_t *>(buff.data()),
                       static_cast<size_t>(n));
@@ -515,15 +547,7 @@ static bool mkares_sendbuf(
   ssize_t n = send(sock, base, count, 0);
 #endif
   MKARES_HOOK(send, n);
-  {
-    nlohmann::json json;
-    json["key"] = "mkares.send";
-    json["value"]["data"] = mkares_maybe_base64(base, count);
-    json["value"]["errno"] = mkares_errno_string(n);
-    json["value"]["ret"] = n;
-    json["value"]["t"] = mkares_now();
-    response->send_event = json.dump();
-  }
+  response->send_event = mkares_send_event_new(base, count, n);
   return n > 0 && static_cast<size_t>(n) == count;
 }
 
@@ -590,8 +614,11 @@ static bool mkares_sendrecv(
   int ret = getaddrinfo(query->server_address.c_str(),
                         query->server_port.c_str(), &hints, &rp);
   MKARES_HOOK(getaddrinfo, ret);
-  // TODO(bassosimone): we probably want to notify the user in this case.
-  if (ret != 0) return false;
+  if (ret != 0) {
+    response->send_event = mkares_generic_event_new(
+        "mkares.send", "", "invalid_server_endpoint", -1);
+    return false;
+  }
   if (rp == nullptr || rp->ai_next != nullptr) MKARES_ABORT();
   bool good = mkares_sendrecv_ainfo(query, response, rp);
   freeaddrinfo(rp);
