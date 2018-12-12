@@ -3,7 +3,10 @@
 /CTestTestfile.cmake
 /Makefile
 /Testing/
+/argh.h
 /catch.hpp
 /cmake_install.cmake
+/json.hpp
 /libmkudns.a
+/mkdata.h
 /mkudns-client

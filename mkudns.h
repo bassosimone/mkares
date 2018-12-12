@@ -457,10 +457,10 @@ static std::string mkudns_recv_event_new(
 static std::string mkudns_send_event_new(
     const mkudns_query_t *query, const void *data,
     size_t count, int64_t retval) {
-  if (query == nullptr || data == nullptr) MKUDNS_ABORT();
+  if (query == nullptr || data == nullptr || count > INT64_MAX) MKUDNS_ABORT();
   return mkudns_generic_event_new(
       query, "mkudns.send",
-      mkudns_maybe_base64(data, count),
+      mkudns_maybe_base64(data, static_cast<int64_t>(count)),
       mkudns_maybe_errno(retval),
       retval);
 }
