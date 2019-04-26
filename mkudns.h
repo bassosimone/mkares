@@ -177,7 +177,7 @@ using mkudns_response_uptr = std::unique_ptr<mkudns_response_t,
 
 #include "json.hpp"
 
-#include "mkdata.h"
+#include "mkdata.hpp"
 
 // MKUDNS_ABORT allows to check in unit tests that we correctly abort.
 #ifndef MKUDNS_ABORT
@@ -418,10 +418,9 @@ static std::string mkudns_maybe_base64(const void *buff, int64_t count) {
   if (buff == nullptr) MKUDNS_ABORT();
   if (count <= 0) return "";
   if (static_cast<uint64_t>(count) > SIZE_MAX) MKUDNS_ABORT();
-  mkdata_uptr data{mkdata_new_nonnull()};
-  mkdata_movein_data(data, std::string{reinterpret_cast<const char *>(buff),
-                                       static_cast<size_t>(count)});
-  return mkdata_moveout_base64(data);
+  return mk::data::base64_encode(
+      std::string{reinterpret_cast<const char *>(buff),
+                  static_cast<size_t>(count)});
 }
 
 // mkudns_generic_event_new creates a new generic event.

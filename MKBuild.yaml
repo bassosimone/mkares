@@ -1,0 +1,23 @@
+name: mkudns
+
+docker: bassosimone/mk-debian
+
+dependencies:
+- github.com/adishavit/argh
+- github.com/c-ares/c-ares
+- github.com/measurement-kit/mkdata
+- github.com/nlohmann/json
+- github.com/openssl/openssl
+
+targets:
+  libraries:
+    mkudns:
+      compile: [mkudns.cpp]
+  executables:
+    mkudns-client:
+      compile: [mkudns-client.cpp]
+      link: [mkudns]
+
+tests:
+  resolve_address:
+    command: mkudns-client --server-address 1.1.1.1 www.kernel.org
