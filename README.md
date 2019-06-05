@@ -4,6 +4,9 @@
 
 Experimental library to perform UDP-based DNS queries in MK.
 
+⚠️⚠️⚠️⚠️⚠️⚠️⚠️: We're going to archive this. We'll use a Go engine to implement this
+functionality in OONI. So, this experiment can now go to the attic.
+
 ## Regenerating build files
 
 Possibly edit `MKBuild.yaml`, then run:
